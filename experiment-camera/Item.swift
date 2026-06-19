@@ -11,8 +11,10 @@ import SwiftData
 @Model
 final class Item {
     var timestamp: Date
-    
-    init(timestamp: Date) {
+    var imagePath: String?
+
+    init(timestamp: Date, imagePath: String? = nil) {
         self.timestamp = timestamp
+        self.imagePath = imagePath
     }
 }
