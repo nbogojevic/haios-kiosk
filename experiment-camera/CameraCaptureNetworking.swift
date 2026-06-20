@@ -357,20 +357,12 @@ final class LatestImageHTTPServer {
 
         guard info.camera.isFilming else {
             let identity: MJPEGFrameIdentity = .placeholder(.cameraOff)
-            guard lastFrameIdentity != identity else {
-                return .noChange
-            }
-
             return .frame(identity: identity, imageData: cameraOffPlaceholder)
         }
 
         do {
             guard let latestImage = try LatestCaptureFileLocator.latestImageFile() else {
                 let identity: MJPEGFrameIdentity = .placeholder(.waitingForFirstImage)
-                guard lastFrameIdentity != identity else {
-                    return .noChange
-                }
-
                 return .frame(identity: identity, imageData: waitingForFirstImagePlaceholder)
             }
 
@@ -387,10 +379,6 @@ final class LatestImageHTTPServer {
             return .frame(identity: identity, imageData: imageData)
         } catch {
             let identity: MJPEGFrameIdentity = .placeholder(.waitingForFirstImage)
-            guard lastFrameIdentity != identity else {
-                return .noChange
-            }
-
             return .frame(identity: identity, imageData: waitingForFirstImagePlaceholder)
         }
     }
@@ -482,13 +470,38 @@ final class LatestImageHTTPServer {
 
             let symbolConfiguration = UIImage.SymbolConfiguration(pointSize: 180, weight: .regular)
             let icon = UIImage(systemName: "camera.fill", withConfiguration: symbolConfiguration)
-            let tintedIcon = icon?.withTintColor(UIColor.white.withAlphaComponent(0.9), renderingMode: .alwaysOriginal)
+            let tintedIcon = icon?.withTintColor(UIColor.systemGray2, renderingMode: .alwaysOriginal)
             let iconSize = CGSize(width: 220, height: 180)
             let iconOrigin = CGPoint(
                 x: (size.width - iconSize.width) / 2,
                 y: (size.height - iconSize.height) / 2
             )
             tintedIcon?.draw(in: CGRect(origin: iconOrigin, size: iconSize))
+
+            let title = switch style {
+            case .waitingForFirstImage:
+                "Waiting"
+            case .cameraOff:
+                "Camera Off"
+            }
+
+            let paragraphStyle = NSMutableParagraphStyle()
+            paragraphStyle.alignment = .center
+
+            let titleAttributes: [NSAttributedString.Key: Any] = [
+                .font: UIFont.systemFont(ofSize: 42, weight: .semibold),
+                .foregroundColor: UIColor.systemGray,
+                .paragraphStyle: paragraphStyle
+            ]
+
+            let titleRect = CGRect(
+                x: 120,
+                y: iconOrigin.y + iconSize.height + 28,
+                width: size.width - 240,
+                height: 52
+            )
+
+            title.draw(in: titleRect, withAttributes: titleAttributes)
         }
 
         return image.jpegData(compressionQuality: 0.8) ?? Data()

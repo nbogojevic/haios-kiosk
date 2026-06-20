@@ -11,12 +11,62 @@ import Combine
 import CoreImage
 import UIKit
 
+enum CaptureRetentionPolicy {
+    static let maxRetainedImages = 10
+
+    static func pruneCapturedImages(
+        in directoryURL: URL,
+        keepingNewest limit: Int = maxRetainedImages,
+        fileManager: FileManager = .default
+    ) throws -> [URL] {
+        guard fileManager.fileExists(atPath: directoryURL.path) else {
+            return []
+        }
+
+        let retainedImageCount = max(limit, 0)
+        let resourceKeys: Set<URLResourceKey> = [.contentModificationDateKey, .creationDateKey, .isRegularFileKey]
+        let imageFiles = try fileManager.contentsOfDirectory(
+            at: directoryURL,
+            includingPropertiesForKeys: Array(resourceKeys),
+            options: [.skipsHiddenFiles]
+        )
+        .filter { ["jpg", "jpeg"].contains($0.pathExtension.lowercased()) }
+        .compactMap { fileURL -> (url: URL, timestamp: Date)? in
+            let resourceValues = try? fileURL.resourceValues(forKeys: resourceKeys)
+            guard resourceValues?.isRegularFile == true else {
+                return nil
+            }
+
+            let timestamp = resourceValues?.contentModificationDate ?? resourceValues?.creationDate ?? .distantPast
+            return (url: fileURL, timestamp: timestamp)
+        }
+        .sorted { lhs, rhs in
+            if lhs.timestamp == rhs.timestamp {
+                return lhs.url.lastPathComponent > rhs.url.lastPathComponent
+            }
+
+            return lhs.timestamp > rhs.timestamp
+        }
+
+        guard imageFiles.count > retainedImageCount else {
+            return []
+        }
+
+        var removedFiles: [URL] = []
+
+        for file in imageFiles.dropFirst(retainedImageCount) {
+            try fileManager.removeItem(at: file.url)
+            removedFiles.append(file.url)
+        }
+
+        return removedFiles
+    }
+}
+
 @MainActor
 final class CameraCaptureService: ObservableObject {
-    private static let initialCaptureDelay: TimeInterval = 1
+    private static let initialCaptureDelay: TimeInterval = 10
     private static let latestImageServerPort: UInt16 = 2112
-    private static let latestImagePath = "/latestImage.jpg"
-//    private static let infoPath = "/info"
 
     @Published private(set) var authorizationDenied = false
     @Published private(set) var captureCount = 0
@@ -80,10 +130,10 @@ final class CameraCaptureService: ObservableObject {
         }
 
         if isRunning {
-            return "The app silently saves one front-camera image immediately, then continues every \(captureIntervalDescription)."
+            return "The app saves image every \(captureIntervalDescription)."
         }
 
-        return "Tap the camera button to silently capture from the front camera every \(captureIntervalDescription)."
+        return "Tap the camera button to capture from the front camera every \(captureIntervalDescription)."
     }
 
     private var captureIntervalDescription: String {
@@ -457,6 +507,13 @@ private final class VideoFrameCaptureProcessor: NSObject, AVCaptureVideoDataOutp
         let sanitizedTimestamp = formatter.string(from: timestamp).replacingOccurrences(of: ":", with: "-")
         let fileURL = capturesDirectory.appendingPathComponent("front-camera-\(sanitizedTimestamp).jpg")
         try imageData.write(to: fileURL, options: Data.WritingOptions.atomic)
+
+        do {
+            _ = try CaptureRetentionPolicy.pruneCapturedImages(in: capturesDirectory)
+        } catch {
+            print("Failed to prune older captured images: \(error.localizedDescription)")
+        }
+
         return fileURL
     }
 

@@ -80,7 +80,7 @@ struct ContentView: View {
             cameraService.setCaptureInterval(seconds: captureIntervalSeconds)
             cameraService.setCaptureHandler { timestamp, imagePath in
                 withAnimation {
-                    modelContext.insert(Item(timestamp: timestamp, imagePath: imagePath))
+                    insertCapturedItem(timestamp: timestamp, imagePath: imagePath)
                 }
             }
         }
@@ -175,6 +175,28 @@ struct ContentView: View {
             if FileManager.default.fileExists(atPath: capturesDirectoryURL.path) {
                 try? FileManager.default.removeItem(at: capturesDirectoryURL)
             }
+        }
+    }
+
+    private func insertCapturedItem(timestamp: Date, imagePath: String) {
+        modelContext.insert(Item(timestamp: timestamp, imagePath: imagePath))
+        pruneStoredCaptures(keepingNewest: CaptureRetentionPolicy.maxRetainedImages)
+    }
+
+    private func pruneStoredCaptures(keepingNewest limit: Int) {
+        let retainedItemCount = max(limit, 0)
+        let descriptor = FetchDescriptor<Item>(sortBy: [SortDescriptor(\Item.timestamp, order: .reverse)])
+
+        guard let storedItems = try? modelContext.fetch(descriptor), storedItems.count > retainedItemCount else {
+            return
+        }
+
+        for item in storedItems.dropFirst(retainedItemCount) {
+            if let imagePath = item.imagePath {
+                try? FileManager.default.removeItem(atPath: imagePath)
+            }
+
+            modelContext.delete(item)
         }
     }
 
