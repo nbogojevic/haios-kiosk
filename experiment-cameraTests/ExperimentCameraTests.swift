@@ -1,5 +1,5 @@
 //
-//  experiment_cameraTests.swift
+//  ExperimentCameraTests.swift
 //  experiment-cameraTests
 //
 //  Created by Nenad BOGOJEVIC on 19/06/2026.
@@ -9,7 +9,7 @@ import Foundation
 import Testing
 @testable import experiment_camera
 
-struct experiment_cameraTests {
+struct ExperimentCameraTests {
     @Test func pruneCapturedImagesKeepsNewestTenJPEGs() throws {
         let temporaryDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)

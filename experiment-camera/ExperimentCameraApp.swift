@@ -1,5 +1,5 @@
 //
-//  experiment_cameraApp.swift
+//  ExperimentCameraApp.swift
 //  experiment-camera
 //
 //  Created by Nenad BOGOJEVIC on 19/06/2026.
@@ -9,7 +9,7 @@ import SwiftUI
 import SwiftData
 
 @main
-struct experiment_cameraApp: App {
+struct ExperimentCameraApp: App {
     var sharedModelContainer: ModelContainer = {
         let schema = Schema([
             Item.self,

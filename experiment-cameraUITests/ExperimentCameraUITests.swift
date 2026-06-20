@@ -1,5 +1,5 @@
 //
-//  experiment_cameraUITests.swift
+//  ExperimentCameraUITests.swift
 //  experiment-cameraUITests
 //
 //  Created by Nenad BOGOJEVIC on 19/06/2026.
@@ -7,7 +7,7 @@
 
 import XCTest
 
-final class experiment_cameraUITests: XCTestCase {
+final class ExperimentCameraUITests: XCTestCase {
 
     override func setUpWithError() throws {
         // Put setup code here. This method is called before the invocation of each test method in the class.
@@ -31,6 +31,39 @@ final class experiment_cameraUITests: XCTestCase {
         // Use XCTAssert and related functions to verify your tests produce the correct results.
         // XCUIAutomation Documentation
         // https://developer.apple.com/documentation/xcuiautomation
+    }
+
+    @MainActor
+    func testSettingsButtonAndBackButtonRemainInteractive() throws {
+        let app = XCUIApplication()
+        app.launch()
+
+        let settingsButton = app.buttons["Settings"]
+        XCTAssertTrue(settingsButton.waitForExistence(timeout: 5))
+        settingsButton.tap()
+
+        let settingsNavigationBar = app.navigationBars["Settings"]
+        XCTAssertTrue(settingsNavigationBar.waitForExistence(timeout: 5))
+
+        let doneButton = settingsNavigationBar.buttons["Done"]
+        XCTAssertTrue(doneButton.exists)
+        doneButton.tap()
+
+        let homeNavigationBar = app.navigationBars["Home"]
+        XCTAssertTrue(homeNavigationBar.waitForExistence(timeout: 5))
+
+        let openCameraControlsButton = app.buttons["Open camera controls"]
+        XCTAssertTrue(openCameraControlsButton.exists)
+        openCameraControlsButton.tap()
+
+        let cameraNavigationBar = app.navigationBars["Camera"]
+        XCTAssertTrue(cameraNavigationBar.waitForExistence(timeout: 5))
+
+        let backButton = cameraNavigationBar.buttons["Home"]
+        XCTAssertTrue(backButton.exists)
+        backButton.tap()
+
+        XCTAssertTrue(homeNavigationBar.waitForExistence(timeout: 5))
     }
 
     @MainActor

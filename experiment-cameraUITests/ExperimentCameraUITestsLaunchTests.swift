@@ -1,5 +1,5 @@
 //
-//  experiment_cameraUITestsLaunchTests.swift
+//  ExperimentCameraUITestsLaunchTests.swift
 //  experiment-cameraUITests
 //
 //  Created by Nenad BOGOJEVIC on 19/06/2026.
@@ -7,7 +7,7 @@
 
 import XCTest
 
-final class experiment_cameraUITestsLaunchTests: XCTestCase {
+final class ExperimentCameraUITestsLaunchTests: XCTestCase {
 
     override class var runsForEachTargetApplicationUIConfiguration: Bool {
         true

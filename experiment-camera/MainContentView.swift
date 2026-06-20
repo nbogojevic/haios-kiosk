@@ -23,6 +23,7 @@ struct ContentView: View {
     @AppStorage(CaptureRetentionPolicy.storageKey) private var maxRetainedImages = CaptureRetentionPolicy.defaultMaxRetainedImages
     @AppStorage("startCameraOnLaunch") private var startCameraOnLaunch = false
     @AppStorage(BrowserSession.startupURLStorageKey) private var startupURLString = BrowserSession.defaultStartupURLString
+
     @Environment(\.modelContext) private var modelContext
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var cameraService = CameraCaptureService()
@@ -30,55 +31,96 @@ struct ContentView: View {
     @State private var showingSettings = false
     @State private var didConfigureInitialState = false
     @State private var navigationPath: [AppDestination] = []
-
+    
+    @AppStorage("screenSaverSeconds") private var screenSaverSeconds = 45
+    @AppStorage("screenDimDelaySeconds") private var screenDimDelaySeconds = 30
+    @AppStorage("screenDimBrightnessPercent") private var screenDimBrightnessPercent = 30
+    @State private var isScreenSaverActive = false
+    @State private var isScreenDimmed = false
+    @State private var lastUserActivity = Date()
+    @State private var screenSaverActivatedAt: Date?
+    @State private var currentTime = Date()
+    private let inactivityTimer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
+    
     var body: some View {
-        NavigationStack(path: $navigationPath) {
-            homeView
-                .navigationTitle("Home")
-                .toolbar {
-                    ToolbarItem(placement: .topBarLeading) {
-                        Button {
-                            showingSettings = true
-                        } label: {
-                            Label("Settings", systemImage: "gearshape")
+        ZStack {
+            NavigationStack(path: $navigationPath) {
+                homeView
+                    .navigationTitle("Home")
+                    .toolbar {
+                        ToolbarItem(placement: .topBarLeading) {
+                            Button {
+                                registerUserActivity()
+                                showingSettings = true
+                            } label: {
+                                Label("Settings", systemImage: "gearshape")
+                            }
+                        }
+
+                        ToolbarItemGroup(placement: .topBarTrailing) {
+                            Button {
+                                registerUserActivity()
+                                showDestination(.web)
+                            } label: {
+                                Image(systemName: "house")
+                            }
+                            .accessibilityLabel("Open web view")
+
+                            Button {
+                                registerUserActivity()
+                                showDestination(.camera)
+                            } label: {
+                                Image(systemName: "camera")
+                            }
+                            .accessibilityLabel("Open camera controls")
+
+                            Button {
+                                registerUserActivity()
+                                showDestination(.captures)
+                            } label: {
+                                Image(systemName: "photo")
+                            }
+                            .accessibilityLabel("Open captures")
                         }
                     }
-
-                    ToolbarItemGroup(placement: .topBarTrailing) {
-                        Button {
-                            showDestination(.web)
-                        } label: {
-                            Image(systemName: "house")
+                    .navigationDestination(for: AppDestination.self) { destination in
+                        switch destination {
+                        case .web:
+                            WebBrowserView(
+                                browserSession: browserSession,
+                                openRootHome: navigateHome,
+                                onUserActivity: registerUserActivity
+                            )
+                        case .camera:
+                            CameraControlView(
+                                cameraService: cameraService,
+                                openWebView: openWebView,
+                                onUserActivity: registerUserActivity
+                            )
+                        case .captures:
+                            CapturesView(
+                                openWebView: openWebView,
+                                onUserActivity: registerUserActivity
+                            )
                         }
-                        .accessibilityLabel("Open web view")
-
-                        Button {
-                            showDestination(.camera)
-                        } label: {
-                            Image(systemName: "camera")
-                        }
-                        .accessibilityLabel("Open camera controls")
-
-                        Button {
-                            showDestination(.captures)
-                        } label: {
-                            Image(systemName: "photo")
-                        }
-                        .accessibilityLabel("Open captures")
                     }
-                }
-                .navigationDestination(for: AppDestination.self) { destination in
-                    switch destination {
-                    case .web:
-                        WebBrowserView(browserSession: browserSession, openRootHome: navigateHome)
-                    case .camera:
-                        CameraControlView(cameraService: cameraService, openWebView: openWebView)
-                    case .captures:
-                        CapturesView(openWebView: openWebView)
-                    }
-                }
+            }
+
+            if isScreenSaverActive {
+                screenSaverView
+            }
+        }
+        .onReceive(inactivityTimer) { _ in
+            currentTime = Date()
+            updateScreenSaverState()
         }
         .onAppear {
+            currentTime = Date()
+            lastUserActivity = Date()
+            isScreenSaverActive = false
+            isScreenDimmed = false
+            screenSaverActivatedAt = nil
+
             if !didConfigureInitialState {
                 didConfigureInitialState = true
 
@@ -115,6 +157,7 @@ struct ContentView: View {
         .onChange(of: scenePhase) { _, newPhase in
             switch newPhase {
             case .active:
+                registerUserActivity()
                 Task {
                     await cameraService.resumeIfNeeded()
                 }
@@ -131,7 +174,11 @@ struct ContentView: View {
                 captureIntervalSeconds: $captureIntervalSeconds,
                 maxRetainedImages: $maxRetainedImages,
                 startCameraOnLaunch: $startCameraOnLaunch,
-                startupURLString: $startupURLString
+                startupURLString: $startupURLString,
+                screenSaverSeconds: $screenSaverSeconds,
+                screenDimDelaySeconds: $screenDimDelaySeconds,
+                screenDimBrightnessPercent: $screenDimBrightnessPercent,
+                onUserActivity: registerUserActivity
             )
         }
     }
@@ -139,6 +186,19 @@ struct ContentView: View {
     private var homeView: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
+                NavigationLink(value: AppDestination.web) {
+                    HomeNavigationCardView(title: "Dashboard", systemImage: "house") {
+                        Text("Open the dashboard screen.")
+                            .font(.body)
+                            .foregroundStyle(.secondary)
+
+                        Text("The URL is \(startupURLString.isEmpty ? "empty" : "set to \(startupURLString)").")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .buttonStyle(.plain)
+                
                 NavigationLink(value: AppDestination.camera) {
                     HomeNavigationCardView(title: "Camera controls", systemImage: "camera") {
                         Text("Open the camera screen to start or stop capture, review status, and monitor the latest capture time.")
@@ -170,6 +230,7 @@ struct ContentView: View {
             .padding()
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .trackUserActivity(registerUserActivity)
     }
 
     private func insertCapturedItem(timestamp: Date, imagePath: String) {
@@ -206,6 +267,98 @@ struct ContentView: View {
         navigationPath = [.web]
     }
 
+    private var screenSaverView: some View {
+        ZStack {
+            Color.black
+                .ignoresSafeArea()
+
+            VStack(spacing: 18) {
+                Text(currentTime, format: .dateTime.hour().minute())
+                    .font(.system(size: 160, weight: .bold, design: .rounded))
+                    .foregroundStyle(clockColor)
+                    .monospacedDigit()
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.3)
+                    .frame(maxWidth: .infinity)
+
+                Text(formattedCurrentDate)
+                    .font(.system(size: 30, weight: .medium, design: .rounded))
+                    .foregroundStyle(clockColor)
+                    .multilineTextAlignment(.center)
+            }
+            .padding(.horizontal)
+
+            if isScreenDimmed {
+                Color.black
+                    .opacity(screenDimOverlayOpacity)
+                    .ignoresSafeArea()
+                    .allowsHitTesting(false)
+            }
+        }
+        .contentShape(Rectangle())
+        .onTapGesture {
+            registerUserActivity()
+        }
+        .simultaneousGesture(DragGesture(minimumDistance: 0).onChanged { _ in
+            registerUserActivity()
+        })
+    }
+
+    private var clockColor: Color {
+        isNightClockMode ? nightRedColor : .white
+    }
+
+    private var isNightClockMode: Bool {
+        let hour = Calendar.current.component(.hour, from: currentTime)
+        return hour >= 23 || hour < 5
+    }
+
+    private var nightRedColor: Color {
+        Color(red: 0.5, green: 0.1, blue: 0.1)
+    }
+
+    private var formattedCurrentDate: String {
+        currentTime.formatted(date: .complete, time: .omitted)
+    }
+
+    private func registerUserActivity() {
+        lastUserActivity = Date()
+        isScreenSaverActive = false
+        isScreenDimmed = false
+        screenSaverActivatedAt = nil
+    }
+
+    private func updateScreenSaverState() {
+        let now = Date()
+
+        if isScreenSaverActive {
+            updateScreenDimmingState(at: now)
+            return
+        }
+
+        let idleTime = now.timeIntervalSince(lastUserActivity)
+        if idleTime >= TimeInterval(max(1, screenSaverSeconds)) {
+            isScreenSaverActive = true
+            isScreenDimmed = false
+            screenSaverActivatedAt = now
+        }
+    }
+
+    private func updateScreenDimmingState(at now: Date) {
+        guard let activatedAt = screenSaverActivatedAt else {
+            isScreenDimmed = false
+            return
+        }
+
+        let elapsed = now.timeIntervalSince(activatedAt)
+        isScreenDimmed = elapsed >= TimeInterval(max(1, screenDimDelaySeconds))
+    }
+
+    private var screenDimOverlayOpacity: Double {
+        let clampedBrightness = min(max(screenDimBrightnessPercent, 0), 100)
+        return 1 - (Double(clampedBrightness) / 100.0)
+    }
+
 }
 
 private struct HomeNavigationCardView<Content: View>: View {
@@ -238,6 +391,7 @@ private struct HomeNavigationCardView<Content: View>: View {
 private struct CameraControlView: View {
     @ObservedObject var cameraService: CameraCaptureService
     let openWebView: () -> Void
+    let onUserActivity: () -> Void
 
     var body: some View {
         ScrollView {
@@ -259,16 +413,9 @@ private struct CameraControlView: View {
             .padding()
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .trackUserActivity(onUserActivity)
         .navigationTitle("Camera")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button(action: openWebView) {
-                    Image(systemName: "house")
-                }
-                .accessibilityLabel("Open web view")
-            }
-        }
         .safeAreaInset(edge: .bottom) {
             Button(action: toggleCamera) {
                 Label(cameraService.buttonTitle, systemImage: cameraService.buttonIconName)
@@ -284,6 +431,8 @@ private struct CameraControlView: View {
     }
 
     private func toggleCamera() {
+        onUserActivity()
+
         if cameraService.wantsToRun {
             cameraService.stop()
         } else {
@@ -322,6 +471,7 @@ private struct CapturesView: View {
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \Item.timestamp, order: .reverse) private var items: [Item]
     let openWebView: () -> Void
+    let onUserActivity: () -> Void
     @State private var showingDeleteImagesConfirmation = false
     @State private var isSelectingItems = false
     @State private var selectedItemIDs = Set<PersistentIdentifier>()
@@ -343,7 +493,11 @@ private struct CapturesView: View {
                     .buttonStyle(.plain)
                 } else {
                     NavigationLink {
-                        ItemDetailView(item: item, openWebView: openWebView)
+                        ItemDetailView(
+                            item: item,
+                            openWebView: openWebView,
+                            onUserActivity: onUserActivity
+                        )
                     } label: {
                         CaptureRowContentView(item: item)
                     }
@@ -352,16 +506,19 @@ private struct CapturesView: View {
             }
             .onDelete(perform: deleteItems)
         }
+        .trackUserActivity(onUserActivity)
         .navigationTitle(navigationTitle)
         .toolbar {
             ToolbarItemGroup(placement: .topBarLeading) {
                 if !items.isEmpty {
                     Button(isSelectingItems ? "Done" : "Select") {
+                        onUserActivity()
                         toggleSelectionMode()
                     }
 
                     if isSelectingItems {
                         Button(selectionActionTitle) {
+                            onUserActivity()
                             toggleSelectAllItems()
                         }
                     }
@@ -370,12 +527,8 @@ private struct CapturesView: View {
 
             ToolbarItem(placement: .topBarTrailing) {
                 HStack {
-                    Button(action: openWebView) {
-                        Image(systemName: "house")
-                    }
-                    .accessibilityLabel("Open web view")
-
                     Button {
+                        onUserActivity()
                         shareSelectedOrLatestImage()
                     } label: {
                         Image(systemName: "square.and.arrow.up")
@@ -384,6 +537,7 @@ private struct CapturesView: View {
                     .disabled(shareableImageURLs.isEmpty)
 
                     Button(role: .destructive) {
+                        onUserActivity()
                         showingDeleteImagesConfirmation = true
                     } label: {
                         Image(systemName: "trash")
@@ -549,6 +703,10 @@ private struct SettingsView: View {
     @Binding var maxRetainedImages: Int
     @Binding var startCameraOnLaunch: Bool
     @Binding var startupURLString: String
+    @Binding var screenSaverSeconds: Int
+    @Binding var screenDimDelaySeconds: Int
+    @Binding var screenDimBrightnessPercent: Int
+    let onUserActivity: () -> Void
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -604,12 +762,50 @@ private struct SettingsView: View {
                 } footer: {
                     Text("Choose how many of the newest photos to keep on disk. Lowering this value immediately removes older saved photos and their entries.")
                 }
+
+                Section {
+                    Stepper(value: $screenSaverSeconds, in: 1...3600) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Show screen saver after")
+
+                            Text(screenSaverDescription)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+
+                    Stepper(value: $screenDimDelaySeconds, in: 1...3600) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Dim after screen saver starts")
+
+                            Text(screenDimDelayDescription)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+
+                    Stepper(value: $screenDimBrightnessPercent, in: 0...100) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Dimmed brightness")
+
+                            Text(screenDimBrightnessDescription)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                } header: {
+                    Text("Screen Saver")
+                } footer: {
+                    Text("The screen saver shows only the current time and date. After it appears, the app dims further using the brightness level you choose here.")
+                }
             }
+            .trackUserActivity(onUserActivity)
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Done") {
+                        onUserActivity()
                         dismiss()
                     }
                 }
@@ -631,44 +827,111 @@ private struct SettingsView: View {
             "Keep \(maxRetainedImages) saved photos"
         }
     }
+
+    private var screenSaverDescription: String {
+        screenSaverSeconds == 1 ? "After 1 second of inactivity" : "After \(screenSaverSeconds) seconds of inactivity"
+    }
+
+    private var screenDimDelayDescription: String {
+        screenDimDelaySeconds == 1 ? "Dim 1 second later" : "Dim \(screenDimDelaySeconds) seconds later"
+    }
+
+    private var screenDimBrightnessDescription: String {
+        if screenDimBrightnessPercent == 0 {
+            return "Completely dark"
+        }
+
+        if screenDimBrightnessPercent == 100 {
+            return "No extra dimming"
+        }
+
+        return "Keep \(screenDimBrightnessPercent)% brightness"
+    }
 }
 
 private struct WebBrowserView: View {
     @ObservedObject var browserSession: BrowserSession
     let openRootHome: () -> Void
+    let onUserActivity: () -> Void
+    @State private var isNavigationBarVisible = true
+    @State private var hideNavigationBarTask: Task<Void, Never>?
+
+    private let navigationBarAutoHideDelay: Duration = .seconds(3)
 
     var body: some View {
-        WebViewContainer(webView: browserSession.webView, onRefresh: browserSession.reloadCurrentPage)
+        WebViewContainer(
+            webView: browserSession.webView,
+            onRefresh: browserSession.reloadCurrentPage,
+            onRevealNavigationBar: revealNavigationBarTemporarily,
+            onNavigateHome: openRootHome,
+            onUserActivity: onUserActivity
+        )
             .navigationTitle("Dashboard")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbar(isNavigationBarVisible ? .visible : .hidden, for: .navigationBar)
             .toolbar {
                 ToolbarItemGroup(placement: .topBarTrailing) {
                     Button {
+                        onUserActivity()
                         browserSession.reloadCurrentPage()
                     } label: {
                         Image(systemName: "arrow.clockwise")
                     }
                     .accessibilityLabel("Reload page")
-
-                    Button(action: openRootHome) {
-                        Image(systemName: "rectangle.grid.2x2")
-                    }
-                    .accessibilityLabel("Open home")
                 }
             }
             .ignoresSafeArea(edges: .bottom)
             .onAppear {
                 browserSession.loadInitialPageIfNeeded()
+                isNavigationBarVisible = true
+                scheduleNavigationBarAutoHide()
             }
+            .onDisappear {
+                hideNavigationBarTask?.cancel()
+            }
+    }
+
+    private func revealNavigationBarTemporarily() {
+        withAnimation {
+            isNavigationBarVisible = true
+        }
+
+        scheduleNavigationBarAutoHide()
+    }
+
+    private func scheduleNavigationBarAutoHide() {
+        hideNavigationBarTask?.cancel()
+        hideNavigationBarTask = Task {
+            try? await Task.sleep(for: navigationBarAutoHideDelay)
+
+            guard !Task.isCancelled else {
+                return
+            }
+
+            await MainActor.run {
+                withAnimation {
+                    isNavigationBarVisible = false
+                }
+            }
+        }
     }
 }
 
 private struct WebViewContainer: UIViewRepresentable {
     let webView: WKWebView
     let onRefresh: () -> Void
+    let onRevealNavigationBar: () -> Void
+    let onNavigateHome: () -> Void
+    let onUserActivity: () -> Void
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(webView: webView, onRefresh: onRefresh)
+        Coordinator(
+            webView: webView,
+            onRefresh: onRefresh,
+            onRevealNavigationBar: onRevealNavigationBar,
+            onNavigateHome: onNavigateHome,
+            onUserActivity: onUserActivity
+        )
     }
 
     func makeUIView(context: Context) -> WKWebView {
@@ -680,17 +943,54 @@ private struct WebViewContainer: UIViewRepresentable {
         context.coordinator.attach(to: uiView)
     }
 
-    final class Coordinator: NSObject, WKNavigationDelegate {
+    final class Coordinator: NSObject, WKNavigationDelegate, UIScrollViewDelegate, UIGestureRecognizerDelegate {
         private weak var webView: WKWebView?
         private let onRefresh: () -> Void
+        private let onRevealNavigationBar: () -> Void
+        private let onNavigateHome: () -> Void
+        private let onUserActivity: () -> Void
         private let refreshControl = UIRefreshControl()
+        private let tapGestureRecognizer = UITapGestureRecognizer()
+        private let panGestureRecognizer = UIPanGestureRecognizer()
+        private let tripleTapGestureRecognizer = UITapGestureRecognizer()
+        private let twoFingerSwipeRightGestureRecognizer = UISwipeGestureRecognizer()
         private var isConfigured = false
+        private var hasTriggeredNavigationBarRevealForCurrentDrag = false
+        private let navigationBarRevealThreshold: CGFloat = 24
 
-        init(webView: WKWebView, onRefresh: @escaping () -> Void) {
+        init(
+            webView: WKWebView,
+            onRefresh: @escaping () -> Void,
+            onRevealNavigationBar: @escaping () -> Void,
+            onNavigateHome: @escaping () -> Void,
+            onUserActivity: @escaping () -> Void
+        ) {
             self.webView = webView
             self.onRefresh = onRefresh
+            self.onRevealNavigationBar = onRevealNavigationBar
+            self.onNavigateHome = onNavigateHome
+            self.onUserActivity = onUserActivity
             super.init()
             refreshControl.addTarget(self, action: #selector(handleRefresh), for: .valueChanged)
+            tapGestureRecognizer.cancelsTouchesInView = false
+            tapGestureRecognizer.delegate = self
+            tapGestureRecognizer.addTarget(self, action: #selector(handleTap))
+
+            panGestureRecognizer.cancelsTouchesInView = false
+            panGestureRecognizer.delegate = self
+            panGestureRecognizer.addTarget(self, action: #selector(handlePan))
+
+            tripleTapGestureRecognizer.numberOfTapsRequired = 3
+            tripleTapGestureRecognizer.numberOfTouchesRequired = 1
+            tripleTapGestureRecognizer.cancelsTouchesInView = false
+            tripleTapGestureRecognizer.delegate = self
+            tripleTapGestureRecognizer.addTarget(self, action: #selector(handleTripleTap))
+
+            twoFingerSwipeRightGestureRecognizer.direction = .right
+            twoFingerSwipeRightGestureRecognizer.numberOfTouchesRequired = 2
+            twoFingerSwipeRightGestureRecognizer.cancelsTouchesInView = false
+            twoFingerSwipeRightGestureRecognizer.delegate = self
+            twoFingerSwipeRightGestureRecognizer.addTarget(self, action: #selector(handleTwoFingerSwipeRight))
         }
 
         func configureIfNeeded() {
@@ -705,9 +1005,26 @@ private struct WebViewContainer: UIViewRepresentable {
         func attach(to webView: WKWebView) {
             self.webView = webView
             webView.navigationDelegate = self
+            webView.scrollView.delegate = self
 
             if webView.scrollView.refreshControl !== refreshControl {
                 webView.scrollView.refreshControl = refreshControl
+            }
+
+            if tapGestureRecognizer.view !== webView {
+                webView.addGestureRecognizer(tapGestureRecognizer)
+            }
+
+            if panGestureRecognizer.view !== webView {
+                webView.addGestureRecognizer(panGestureRecognizer)
+            }
+
+            if tripleTapGestureRecognizer.view !== webView {
+                webView.addGestureRecognizer(tripleTapGestureRecognizer)
+            }
+
+            if twoFingerSwipeRightGestureRecognizer.view !== webView {
+                webView.addGestureRecognizer(twoFingerSwipeRightGestureRecognizer)
             }
         }
 
@@ -717,7 +1034,31 @@ private struct WebViewContainer: UIViewRepresentable {
                 return
             }
 
+            onUserActivity()
             onRefresh()
+        }
+
+        @objc private func handleTap() {
+            onUserActivity()
+        }
+
+        @objc private func handlePan(_ gestureRecognizer: UIPanGestureRecognizer) {
+            switch gestureRecognizer.state {
+            case .began, .changed:
+                onUserActivity()
+            default:
+                break
+            }
+        }
+
+        @objc private func handleTripleTap() {
+            onUserActivity()
+            onRevealNavigationBar()
+        }
+
+        @objc private func handleTwoFingerSwipeRight() {
+            onUserActivity()
+            onNavigateHome()
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
@@ -730,6 +1071,46 @@ private struct WebViewContainer: UIViewRepresentable {
 
         func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
             refreshControl.endRefreshing()
+        }
+
+        func scrollViewDidScroll(_ scrollView: UIScrollView) {
+            if scrollView.isDragging || scrollView.isTracking || scrollView.isDecelerating {
+                onUserActivity()
+            }
+
+            let isPullingDown = scrollView.panGestureRecognizer.translation(in: scrollView).y > 0
+            let isAtTop = scrollView.contentOffset.y <= -scrollView.adjustedContentInset.top
+            let hasExceededRevealThreshold = scrollView.contentOffset.y < -(scrollView.adjustedContentInset.top + navigationBarRevealThreshold)
+
+            guard isPullingDown, isAtTop, hasExceededRevealThreshold else {
+                if !isPullingDown {
+                    hasTriggeredNavigationBarRevealForCurrentDrag = false
+                }
+
+                return
+            }
+
+            guard !hasTriggeredNavigationBarRevealForCurrentDrag else {
+                return
+            }
+
+            hasTriggeredNavigationBarRevealForCurrentDrag = true
+            onRevealNavigationBar()
+        }
+
+        func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
+            hasTriggeredNavigationBarRevealForCurrentDrag = false
+        }
+
+        func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
+            hasTriggeredNavigationBarRevealForCurrentDrag = false
+        }
+
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
+            gestureRecognizer === tapGestureRecognizer
+                || gestureRecognizer === panGestureRecognizer
+                || gestureRecognizer === tripleTapGestureRecognizer
+                || gestureRecognizer === twoFingerSwipeRightGestureRecognizer
         }
     }
 }
@@ -757,7 +1138,7 @@ private struct CaptureRowContentView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 } else {
-                    Label("Image unavailable", systemImage: "photo.slash")
+                    Label("Image unavailable", systemImage: "photo.badge.exclamationmark")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -787,7 +1168,7 @@ private struct CaptureThumbnailView: View {
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
                         .fill(.thinMaterial)
 
-                    Image(systemName: imagePath == nil ? "photo.slash" : "photo")
+                    Image(systemName: imagePath == nil ? "photo.badge.exclamationmark" : "photo")
                         .foregroundStyle(.secondary)
                 }
             }
@@ -838,6 +1219,7 @@ private struct CaptureThumbnailView: View {
 private struct ItemDetailView: View {
     let item: Item
     let openWebView: () -> Void
+    let onUserActivity: () -> Void
 
     var body: some View {
         ScrollView {
@@ -867,16 +1249,9 @@ private struct ItemDetailView: View {
             }
             .padding()
         }
+        .trackUserActivity(onUserActivity)
         .navigationTitle("Capture")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button(action: openWebView) {
-                    Image(systemName: "house")
-                }
-                .accessibilityLabel("Open web view")
-            }
-        }
     }
 
     private var image: UIImage? {
@@ -955,7 +1330,6 @@ private final class BrowserSession: ObservableObject {
         self.userDefaults = userDefaults
         self.persistenceStore = BrowserURLPersistenceStore(userDefaults: userDefaults)
         self.webView = WKWebView(frame: .zero, configuration: configuration)
-        webView.allowsBackForwardNavigationGestures = true
 
         let persistenceStore = self.persistenceStore
         urlObservation = webView.observe(\.url, options: [.new]) { webView, _ in
@@ -1028,6 +1402,26 @@ private extension Item {
         }
 
         return imageURL
+    }
+}
+
+private struct UserActivityTrackingModifier: ViewModifier {
+    let onUserActivity: () -> Void
+
+    func body(content: Content) -> some View {
+        content
+            .simultaneousGesture(TapGesture().onEnded {
+                onUserActivity()
+            })
+            .simultaneousGesture(DragGesture(minimumDistance: 10).onChanged { _ in
+                onUserActivity()
+            })
+    }
+}
+
+private extension View {
+    func trackUserActivity(_ onUserActivity: @escaping () -> Void) -> some View {
+        modifier(UserActivityTrackingModifier(onUserActivity: onUserActivity))
     }
 }
 
