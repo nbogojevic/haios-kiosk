@@ -12,7 +12,13 @@ import CoreImage
 import UIKit
 
 enum CaptureRetentionPolicy {
-    static let maxRetainedImages = 10
+    static let storageKey = "maxRetainedImages"
+    static let defaultMaxRetainedImages = 10
+
+    static var maxRetainedImages: Int {
+        let storedValue = UserDefaults.standard.object(forKey: storageKey) as? Int
+        return max(storedValue ?? defaultMaxRetainedImages, 0)
+    }
 
     static func pruneCapturedImages(
         in directoryURL: URL,
