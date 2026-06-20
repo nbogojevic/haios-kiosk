@@ -10,7 +10,7 @@ import SwiftData
 import UIKit
 
 struct ContentView: View {
-    @AppStorage("captureIntervalSeconds") private var captureIntervalSeconds = 10
+    @AppStorage("captureIntervalSeconds") private var captureIntervalSeconds = 1
     @Environment(\.modelContext) private var modelContext
     @Environment(\.scenePhase) private var scenePhase
     @Query(sort: \Item.timestamp, order: .reverse) private var items: [Item]
@@ -113,12 +113,12 @@ struct ContentView: View {
             Button("Delete All Images", role: .destructive, action: deleteAllImages)
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("This removes every saved camera image from disk and clears the image attachments from existing entries.")
+            Text("This removes every saved camera image from disk and deletes all entries, including those without images.")
         }
     }
 
     private var hasSavedImages: Bool {
-        items.contains { $0.imagePath != nil } || FileManager.default.fileExists(atPath: capturesDirectoryURL.path)
+        !items.isEmpty || FileManager.default.fileExists(atPath: capturesDirectoryURL.path)
     }
 
     private var capturesDirectoryURL: URL {
@@ -169,7 +169,7 @@ struct ContentView: View {
                     try? FileManager.default.removeItem(atPath: imagePath)
                 }
 
-                item.imagePath = nil
+                modelContext.delete(item)
             }
 
             if FileManager.default.fileExists(atPath: capturesDirectoryURL.path) {

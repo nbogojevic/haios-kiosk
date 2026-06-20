@@ -13,6 +13,11 @@ import UIKit
 
 @MainActor
 final class CameraCaptureService: ObservableObject {
+    private static let initialCaptureDelay: TimeInterval = 1
+    private static let latestImageServerPort: UInt16 = 2112
+    private static let latestImagePath = "/latestImage.jpg"
+//    private static let infoPath = "/info"
+
     @Published private(set) var authorizationDenied = false
     @Published private(set) var captureCount = 0
     @Published private(set) var captureInterval: TimeInterval = 10
@@ -21,16 +26,20 @@ final class CameraCaptureService: ObservableObject {
     @Published private(set) var lastCaptureDate: Date?
     @Published private(set) var errorMessage: String?
 
-    private let session = AVCaptureSession()
-    private let videoOutput = AVCaptureVideoDataOutput()
-    private let videoOutputQueue = DispatchQueue(label: "CameraCaptureService.VideoOutput")
-    private let frameCaptureProcessor = VideoFrameCaptureProcessor()
+    private let sessionController = CaptureSessionController()
+    private let latestImageServer = LatestImageHTTPServer(port: latestImageServerPort)
     private var onCapture: ((Date, String) -> Void)?
-    private var isConfigured = false
     private var timer: Timer?
 
     init() {
-        frameCaptureProcessor.onCapture = { [weak self] result in
+        UIDevice.current.isBatteryMonitoringEnabled = true
+
+        latestImageServer.infoProvider = { [weak self] in
+            self?.infoSnapshot() ?? .unavailable
+        }
+        latestImageServer.start()
+
+        sessionController.onCapture = { [weak self] result in
             Task { @MainActor in
                 self?.handleCaptureResult(result)
             }
@@ -63,7 +72,7 @@ final class CameraCaptureService: ObservableObject {
 
     var statusMessage: String {
         if authorizationDenied {
-            return "Allow camera access in Settings to capture an image every \(captureIntervalDescription)."
+            return "Allow camera access in Settings to capture an image every \(captureIntervalDescription). Latest saved image remains available at at webserver listening on port \(Self.latestImageServerPort) while the app is running. The service is advertised over Bonjour."
         }
 
         if let errorMessage, !errorMessage.isEmpty {
@@ -119,12 +128,16 @@ final class CameraCaptureService: ObservableObject {
     }
 
     func pause() {
-        stopSession()
+        Task {
+            await stopSession()
+        }
     }
 
     func stop() {
         wantsToRun = false
-        stopSession()
+        Task {
+            await stopSession()
+        }
     }
 
     private func startCaptureIfNeeded() async {
@@ -132,100 +145,42 @@ final class CameraCaptureService: ObservableObject {
         authorizationDenied = !isAuthorized
 
         guard isAuthorized else {
-            stopSession()
+            await stopSession()
             return
         }
 
         errorMessage = nil
 
-        guard configureSessionIfNeeded() else {
-            stopSession()
-            return
-        }
-
         guard !isRunning else {
             return
         }
 
-        session.startRunning()
-        isRunning = session.isRunning
-        scheduleTimedCaptures(capturingImmediately: true)
-    }
-
-    private func stopSession() {
-        timer?.invalidate()
-        timer = nil
-        frameCaptureProcessor.cancelPendingCapture()
-
-        if session.isRunning {
-            session.stopRunning()
-        }
-
-        isRunning = false
-    }
-
-    private func configureSessionIfNeeded() -> Bool {
-        guard !isConfigured else {
-            return true
-        }
-
-        session.beginConfiguration()
-        session.sessionPreset = .photo
-        defer { session.commitConfiguration() }
-
         do {
-            let camera = try frontCameraDevice()
-            let input = try AVCaptureDeviceInput(device: camera)
+            let didStart = try await sessionController.start()
+            isRunning = didStart
 
-            guard session.canAddInput(input) else {
-                errorMessage = CameraCaptureError.unableToAddCameraInput.errorDescription
-                return false
+            guard didStart else {
+                errorMessage = "The camera session could not be started."
+                return
             }
 
-            session.addInput(input)
-
-            guard session.canAddOutput(videoOutput) else {
-                errorMessage = CameraCaptureError.unableToAddVideoOutput.errorDescription
-                return false
-            }
-
-            videoOutput.alwaysDiscardsLateVideoFrames = true
-            videoOutput.videoSettings = [
-                kCVPixelBufferPixelFormatTypeKey as String: Int(kCVPixelFormatType_32BGRA)
-            ]
-            videoOutput.setSampleBufferDelegate(frameCaptureProcessor, queue: videoOutputQueue)
-            session.addOutput(videoOutput)
-
-            if let connection = videoOutput.connection(with: .video), connection.isVideoMirroringSupported {
-                connection.isVideoMirrored = true
-            }
-
-            isConfigured = true
-            return true
+            scheduleTimedCaptures(capturingImmediately: true)
         } catch {
             errorMessage = error.localizedDescription
-            return false
+            await stopSession()
         }
     }
 
-    private func frontCameraDevice() throws -> AVCaptureDevice {
-        if let trueDepthCamera = AVCaptureDevice.default(.builtInTrueDepthCamera, for: .video, position: .front) {
-            return trueDepthCamera
-        }
+    private func stopSession() async {
+        timer?.invalidate()
+        timer = nil
+        isRunning = false
 
-        if let wideAngleCamera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .front) {
-            return wideAngleCamera
-        }
-
-        throw CameraCaptureError.frontCameraUnavailable
+        _ = await sessionController.stop()
     }
 
     private func scheduleTimedCaptures(capturingImmediately: Bool) {
         timer?.invalidate()
-
-        if capturingImmediately {
-            requestFrameCapture()
-        }
 
         timer = Timer.scheduledTimer(withTimeInterval: captureInterval, repeats: true) { [weak self] _ in
             guard let self else {
@@ -236,14 +191,18 @@ final class CameraCaptureService: ObservableObject {
                 self.requestFrameCapture()
             }
         }
+
+        if capturingImmediately {
+            timer?.fireDate = Date().addingTimeInterval(Self.initialCaptureDelay)
+        }
     }
 
     private func requestFrameCapture() {
-        guard isConfigured, isRunning else {
+        guard isRunning else {
             return
         }
 
-        frameCaptureProcessor.requestCapture()
+        sessionController.requestCapture()
     }
 
     private func handleCaptureResult(_ result: Result<(Date, String), Error>) {
@@ -273,12 +232,162 @@ final class CameraCaptureService: ObservableObject {
             return false
         }
     }
+
+    private func infoSnapshot() -> DeviceInfoSnapshot {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+
+        let batteryState = UIDevice.current.batteryState
+        let batteryLevel = UIDevice.current.batteryLevel
+        let percentageFull = batteryLevel >= 0 ? Int((batteryLevel * 100).rounded()) : nil
+
+        return DeviceInfoSnapshot(
+            deviceName: UIDevice.current.name,
+            ipAddress: DeviceIPAddressProvider.currentIPAddress() ?? "Unavailable",
+            battery: .init(
+                state: batteryState.description,
+                percentageFull: percentageFull,
+                isCharging: batteryState == .charging || batteryState == .full
+            ),
+            camera: .init(
+                isFilming: isRunning,
+                wantsToRun: wantsToRun,
+                captureIntervalSeconds: Int(captureInterval.rounded()),
+                captureCount: captureCount,
+                lastCaptureAt: lastCaptureDate.map(formatter.string(from:)),
+                errorMessage: errorMessage
+            )
+        )
+    }
+}
+
+private final class CaptureSessionController: @unchecked Sendable {
+    private static let portraitVideoRotationAngle: CGFloat = 90
+
+    private let session = AVCaptureSession()
+    private let videoOutput = AVCaptureVideoDataOutput()
+    private let videoOutputQueue = DispatchQueue(label: "CameraCaptureService.VideoOutput")
+    private let sessionQueue = DispatchQueue(label: "CameraCaptureService.Session")
+    private let frameCaptureProcessor = VideoFrameCaptureProcessor()
+    private var isConfigured = false
+
+    var onCapture: ((Result<(Date, String), Error>) -> Void)? {
+        get { frameCaptureProcessor.onCapture }
+        set { frameCaptureProcessor.onCapture = newValue }
+    }
+
+    func start() async throws -> Bool {
+        try await withCheckedThrowingContinuation { continuation in
+            sessionQueue.async { [weak self] in
+                guard let self else {
+                    continuation.resume(returning: false)
+                    return
+                }
+
+                do {
+                    try self.configureSessionIfNeeded()
+
+                    guard !self.session.isRunning else {
+                        continuation.resume(returning: true)
+                        return
+                    }
+
+                    self.session.startRunning()
+                    continuation.resume(returning: self.session.isRunning)
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+
+    func stop() async -> Bool {
+        await withCheckedContinuation { continuation in
+            sessionQueue.async { [weak self] in
+                guard let self else {
+                    continuation.resume(returning: false)
+                    return
+                }
+
+                self.frameCaptureProcessor.cancelPendingCapture()
+
+                if self.session.isRunning {
+                    self.session.stopRunning()
+                }
+
+                continuation.resume(returning: self.session.isRunning)
+            }
+        }
+    }
+
+    func requestCapture() {
+        frameCaptureProcessor.requestCapture()
+    }
+
+    private func configureSessionIfNeeded() throws {
+        guard !isConfigured else {
+            return
+        }
+
+        session.beginConfiguration()
+        session.sessionPreset = .photo
+        defer { session.commitConfiguration() }
+
+        let camera = try frontCameraDevice()
+        let input = try AVCaptureDeviceInput(device: camera)
+
+        guard session.canAddInput(input) else {
+            throw CameraCaptureError.unableToAddCameraInput
+        }
+
+        session.addInput(input)
+
+        guard session.canAddOutput(videoOutput) else {
+            throw CameraCaptureError.unableToAddVideoOutput
+        }
+
+        videoOutput.alwaysDiscardsLateVideoFrames = true
+        videoOutput.videoSettings = [
+            kCVPixelBufferPixelFormatTypeKey as String: Int(kCVPixelFormatType_32BGRA)
+        ]
+        videoOutput.setSampleBufferDelegate(frameCaptureProcessor, queue: videoOutputQueue)
+        session.addOutput(videoOutput)
+
+        if let connection = videoOutput.connection(with: .video) {
+            if connection.isVideoMirroringSupported {
+                connection.isVideoMirrored = true
+            }
+
+            if #available(iOS 17.0, *) {
+                if connection.isVideoRotationAngleSupported(Self.portraitVideoRotationAngle) {
+                    connection.videoRotationAngle = Self.portraitVideoRotationAngle
+                }
+            } else if connection.isVideoOrientationSupported {
+                connection.videoOrientation = .portrait
+            }
+        }
+
+        isConfigured = true
+    }
+
+    private func frontCameraDevice() throws -> AVCaptureDevice {
+        if let trueDepthCamera = AVCaptureDevice.default(.builtInTrueDepthCamera, for: .video, position: .front) {
+            return trueDepthCamera
+        }
+
+        if let wideAngleCamera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .front) {
+            return wideAngleCamera
+        }
+
+        throw CameraCaptureError.frontCameraUnavailable
+    }
 }
 
 private final class VideoFrameCaptureProcessor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
     private let ciContext = CIContext()
     private let lock = NSLock()
     private var pendingCapture = false
+    private var lastDeliveredFrameTimestamp = CMTime.invalid
     var onCapture: ((Result<(Date, String), Error>) -> Void)?
 
     func requestCapture() {
@@ -294,7 +403,7 @@ private final class VideoFrameCaptureProcessor: NSObject, AVCaptureVideoDataOutp
     }
 
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
-        guard takePendingCaptureFlag() else {
+        guard shouldCaptureFrame(with: sampleBuffer) else {
             return
         }
 
@@ -307,7 +416,7 @@ private final class VideoFrameCaptureProcessor: NSObject, AVCaptureVideoDataOutp
         }
     }
 
-    private func takePendingCaptureFlag() -> Bool {
+    private func shouldCaptureFrame(with sampleBuffer: CMSampleBuffer) -> Bool {
         lock.lock()
         defer { lock.unlock() }
 
@@ -315,7 +424,13 @@ private final class VideoFrameCaptureProcessor: NSObject, AVCaptureVideoDataOutp
             return false
         }
 
+        let currentTimestamp = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+        guard lastDeliveredFrameTimestamp == .invalid || CMTimeCompare(currentTimestamp, lastDeliveredFrameTimestamp) > 0 else {
+            return false
+        }
+
         pendingCapture = false
+        lastDeliveredFrameTimestamp = currentTimestamp
         return true
     }
 
