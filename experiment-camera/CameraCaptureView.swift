@@ -88,6 +88,9 @@ final class CameraCaptureService: ObservableObject {
         latestImageServer.infoProvider = { [weak self] in
             self?.infoSnapshot() ?? .unavailable
         }
+        latestImageServer.cameraControlHandler = { [weak self] shouldRun in
+            await self?.setCameraRunning(shouldRun) ?? false
+        }
         latestImageServer.start()
 
         sessionController.onCapture = { [weak self] result in
@@ -166,8 +169,7 @@ final class CameraCaptureService: ObservableObject {
     }
 
     func start() async {
-        wantsToRun = true
-        await startCaptureIfNeeded()
+        _ = await setCameraRunning(true)
     }
 
     func resumeIfNeeded() async {
@@ -185,10 +187,21 @@ final class CameraCaptureService: ObservableObject {
     }
 
     func stop() {
-        wantsToRun = false
         Task {
-            await stopSession()
+            _ = await self.setCameraRunning(false)
         }
+    }
+
+    func setCameraRunning(_ shouldRun: Bool) async -> Bool {
+        if shouldRun {
+            wantsToRun = true
+            await startCaptureIfNeeded()
+            return isRunning
+        }
+
+        wantsToRun = false
+        await stopSession()
+        return isRunning
     }
 
     private func startCaptureIfNeeded() async {

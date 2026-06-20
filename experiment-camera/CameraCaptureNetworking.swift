@@ -126,6 +126,7 @@ final class LatestImageHTTPServer {
     nonisolated private static let infoPath = "/info"
     nonisolated private static let latestImagePath = "/latestImage.jpg"
     nonisolated private static let mjpegPath = "/mjpeg"
+    nonisolated private static let cameraPath = "/camera"
 
     private let port: NWEndpoint.Port
     private let listenerQueue = DispatchQueue(label: "CameraCaptureService.HTTPServer.Listener")
@@ -135,6 +136,7 @@ final class LatestImageHTTPServer {
     private var isStarted = false
     private var activeMJPEGStreamCount = 0
     var infoProvider: (() async -> DeviceInfoSnapshot)?
+    var cameraControlHandler: ((Bool) async -> Bool)?
 
     init(port: UInt16) {
         self.port = NWEndpoint.Port(rawValue: port) ?? .init(integerLiteral: 2112)
@@ -213,13 +215,17 @@ final class LatestImageHTTPServer {
         // - `mjpeg_format`= "multipart/x-mixed-replace" -> MIME type of the live stream
         // - `info_path`   = "/info"               -> JSON device and camera status
         // - `info_format` = "application/json"    -> MIME type of the served metadata
+        // - `camera_path` = "/camera"             -> plain-text camera power endpoint
+        // - `camera_format` = "text/plain"        -> MIME type of the served camera power state
         NetService.data(fromTXTRecord: [
             "path": Data(Self.latestImagePath.utf8),
             "format": Data("image/jpeg".utf8),
             "mjpeg_path": Data(Self.mjpegPath.utf8),
             "mjpeg_format": Data("multipart/x-mixed-replace".utf8),
             "info_path": Data(Self.infoPath.utf8),
-            "info_format": Data("application/json".utf8)
+            "info_format": Data("application/json".utf8),
+            "camera_path": Data(Self.cameraPath.utf8),
+            "camera_format": Data("text/plain".utf8)
         ])
     }
 
@@ -243,6 +249,16 @@ final class LatestImageHTTPServer {
             Task {
                 guard let request = Self.parseRequest(from: data, error: error) else {
                     let response = Self.errorResponse(status: "400 Bad Request", message: "The request was empty.")
+                    connection.send(content: response, completion: .contentProcessed { _ in
+                        connection.cancel()
+                    })
+                    return
+                }
+
+                if request.path == Self.cameraPath {
+                    let response = await self?.cameraResponse(for: request)
+                        ?? Self.errorResponse(status: "500 Internal Server Error", message: "The camera endpoint is unavailable.")
+
                     connection.send(content: response, completion: .contentProcessed { _ in
                         connection.cancel()
                     })
@@ -281,6 +297,70 @@ final class LatestImageHTTPServer {
                 })
             }
         }
+    }
+
+    private func cameraResponse(for request: HTTPRequest) async -> Data {
+        switch request.method {
+        case "GET", "HEAD":
+            return cameraStateResponse(isOn: await currentCameraIsOn(), omitBody: request.omitBody)
+        case "POST":
+            guard let command = request.trimmedBody?.uppercased(), ["ON", "OFF"].contains(command) else {
+                let body = Data("Camera POST body must be ON or OFF.".utf8)
+                return Self.response(
+                    status: "400 Bad Request",
+                    headers: [
+                        "Allow": "GET, HEAD, POST",
+                        "Content-Type": "text/plain; charset=utf-8"
+                    ],
+                    body: body,
+                    omitBody: request.omitBody,
+                    contentLength: body.count
+                )
+            }
+
+            let requestedIsOn = command == "ON"
+            let isOn: Bool
+
+            if let cameraControlHandler {
+                isOn = await cameraControlHandler(requestedIsOn)
+            } else {
+                isOn = await currentCameraIsOn()
+            }
+
+            return cameraStateResponse(isOn: isOn, omitBody: request.omitBody)
+        default:
+            let body = Data("Only GET, HEAD, and POST are supported.".utf8)
+            return Self.response(
+                status: "405 Method Not Allowed",
+                headers: [
+                    "Allow": "GET, HEAD, POST",
+                    "Content-Type": "text/plain; charset=utf-8"
+                ],
+                body: body,
+                omitBody: request.omitBody,
+                contentLength: body.count
+            )
+        }
+    }
+
+    private func currentCameraIsOn() async -> Bool {
+        let info = await infoProvider?() ?? .unavailable
+        return info.camera.isFilming
+    }
+
+    private func cameraStateResponse(isOn: Bool, omitBody: Bool) -> Data {
+        let body = Data((isOn ? "ON" : "OFF").utf8)
+        return Self.response(
+            status: "200 OK",
+            headers: [
+                "Allow": "GET, HEAD, POST",
+                "Cache-Control": "no-store",
+                "Content-Type": "text/plain; charset=utf-8"
+            ],
+            body: body,
+            omitBody: omitBody,
+            contentLength: body.count
+        )
     }
 
     private func responseData(path: String, omitBody: Bool) async -> Data {
@@ -453,10 +533,11 @@ final class LatestImageHTTPServer {
         }
     }
 
-    nonisolated private static func parseRequest(from requestData: Data?, error: NWError?) -> (method: String, path: String, omitBody: Bool)? {
+    nonisolated private static func parseRequest(from requestData: Data?, error: NWError?) -> HTTPRequest? {
         guard error == nil,
               let requestData,
               let request = String(data: requestData, encoding: .utf8),
+              let headerDelimiterRange = request.range(of: "\r\n\r\n"),
               let requestLine = request.components(separatedBy: "\r\n").first,
               !requestLine.isEmpty else {
             return nil
@@ -474,7 +555,14 @@ final class LatestImageHTTPServer {
             .map(String.init)
             ?? rawPath
 
-        return (method: method, path: path, omitBody: method == "HEAD")
+        let bodyString = String(request[headerDelimiterRange.upperBound...])
+
+        return HTTPRequest(
+            method: method,
+            path: path,
+            body: Data(bodyString.utf8),
+            omitBody: method == "HEAD"
+        )
     }
 
     private static func placeholderImageJPEGData(style: MJPEGPlaceholderStyle) -> Data {
@@ -598,6 +686,22 @@ final class LatestImageHTTPServer {
         }
 
         return responseData
+    }
+}
+
+private struct HTTPRequest {
+    let method: String
+    let path: String
+    let body: Data
+    let omitBody: Bool
+
+    var trimmedBody: String? {
+        guard let string = String(data: body, encoding: .utf8) else {
+            return nil
+        }
+
+        let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 }
 
