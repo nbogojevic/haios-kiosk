@@ -20,6 +20,7 @@ struct DeviceInfoSnapshot: Encodable {
     struct CameraInfo: Encodable {
         let isFilming: Bool
         let wantsToRun: Bool
+        let status: String
         let captureIntervalSeconds: Int
         let captureCount: Int
         let lastCaptureAt: String?
@@ -42,6 +43,7 @@ struct DeviceInfoSnapshot: Encodable {
         camera: .init(
             isFilming: false,
             wantsToRun: false,
+            status: "unavailable",
             captureIntervalSeconds: 0,
             captureCount: 0,
             lastCaptureAt: nil,
@@ -53,6 +55,23 @@ struct DeviceInfoSnapshot: Encodable {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         return (try? encoder.encode(self)) ?? Data("{\"error\":\"Unable to encode device info.\"}".utf8)
+    }
+
+    func withCameraStatus(_ status: String) -> DeviceInfoSnapshot {
+        DeviceInfoSnapshot(
+            deviceName: deviceName,
+            ipAddress: ipAddress,
+            battery: battery,
+            camera: .init(
+                isFilming: camera.isFilming,
+                wantsToRun: camera.wantsToRun,
+                status: status,
+                captureIntervalSeconds: camera.captureIntervalSeconds,
+                captureCount: camera.captureCount,
+                lastCaptureAt: camera.lastCaptureAt,
+                errorMessage: camera.errorMessage
+            )
+        )
     }
 }
 
@@ -82,8 +101,10 @@ final class LatestImageHTTPServer {
     private let port: NWEndpoint.Port
     private let listenerQueue = DispatchQueue(label: "CameraCaptureService.HTTPServer.Listener")
     private let connectionQueue = DispatchQueue(label: "CameraCaptureService.HTTPServer.Connection")
+    private let streamCountLock = NSLock()
     private var listener: NWListener?
     private var isStarted = false
+    private var activeMJPEGStreamCount = 0
     var infoProvider: (() async -> DeviceInfoSnapshot)?
 
     init(port: UInt16) {
@@ -240,7 +261,7 @@ final class LatestImageHTTPServer {
             }
 
             let info = await infoProvider?() ?? .unavailable
-            let body = info.responseBody()
+            let body = info.withCameraStatus(currentStreamingStatus(for: info)).responseBody()
             return Self.response(
                 status: "200 OK",
                 headers: [
@@ -296,11 +317,19 @@ final class LatestImageHTTPServer {
             return
         }
 
-        let placeholderImageData = Self.placeholderImageJPEGData()
+        let waitingForFirstImagePlaceholder = Self.placeholderImageJPEGData(style: .waitingForFirstImage)
+        let cameraOffPlaceholder = Self.placeholderImageJPEGData(style: .cameraOff)
         var lastFrameIdentity: MJPEGFrameIdentity?
 
-        while true {
-            let update = await nextMJPEGFrameUpdate(after: lastFrameIdentity, placeholderImageData: placeholderImageData)
+        incrementActiveMJPEGStreamCount()
+        defer { decrementActiveMJPEGStreamCount() }
+
+        while !Task.isCancelled {
+            let update = await nextMJPEGFrameUpdate(
+                after: lastFrameIdentity,
+                waitingForFirstImagePlaceholder: waitingForFirstImagePlaceholder,
+                cameraOffPlaceholder: cameraOffPlaceholder
+            )
 
             switch update {
             case let .frame(identity, imageData):
@@ -319,26 +348,30 @@ final class LatestImageHTTPServer {
         }
     }
 
-    private func nextMJPEGFrameUpdate(after lastFrameIdentity: MJPEGFrameIdentity?, placeholderImageData: Data) async -> MJPEGFrameUpdate {
+    private func nextMJPEGFrameUpdate(
+        after lastFrameIdentity: MJPEGFrameIdentity?,
+        waitingForFirstImagePlaceholder: Data,
+        cameraOffPlaceholder: Data
+    ) async -> MJPEGFrameUpdate {
         let info = await infoProvider?() ?? .unavailable
 
         guard info.camera.isFilming else {
-            let identity: MJPEGFrameIdentity = .idlePlaceholder
+            let identity: MJPEGFrameIdentity = .placeholder(.cameraOff)
             guard lastFrameIdentity != identity else {
                 return .noChange
             }
 
-            return .frame(identity: identity, imageData: placeholderImageData)
+            return .frame(identity: identity, imageData: cameraOffPlaceholder)
         }
 
         do {
             guard let latestImage = try LatestCaptureFileLocator.latestImageFile() else {
-                let identity: MJPEGFrameIdentity = .idlePlaceholder
+                let identity: MJPEGFrameIdentity = .placeholder(.waitingForFirstImage)
                 guard lastFrameIdentity != identity else {
                     return .noChange
                 }
 
-                return .frame(identity: identity, imageData: placeholderImageData)
+                return .frame(identity: identity, imageData: waitingForFirstImagePlaceholder)
             }
 
             let identity: MJPEGFrameIdentity = .latestImage(
@@ -353,13 +386,49 @@ final class LatestImageHTTPServer {
             let imageData = try Data(contentsOf: latestImage.url)
             return .frame(identity: identity, imageData: imageData)
         } catch {
-            let identity: MJPEGFrameIdentity = .idlePlaceholder
+            let identity: MJPEGFrameIdentity = .placeholder(.waitingForFirstImage)
             guard lastFrameIdentity != identity else {
                 return .noChange
             }
 
-            return .frame(identity: identity, imageData: placeholderImageData)
+            return .frame(identity: identity, imageData: waitingForFirstImagePlaceholder)
         }
+    }
+
+    private func currentStreamingStatus(for info: DeviceInfoSnapshot) -> String {
+        guard currentActiveMJPEGStreamCount() > 0 else {
+            return "not_streaming"
+        }
+
+        guard info.camera.isFilming else {
+            return "streaming_camera_off"
+        }
+
+        do {
+            return try LatestCaptureFileLocator.latestImageFile() == nil
+                ? "streaming_waiting_for_first_image"
+                : "streaming_live"
+        } catch {
+            return "streaming_waiting_for_first_image"
+        }
+    }
+
+    private func currentActiveMJPEGStreamCount() -> Int {
+        streamCountLock.lock()
+        defer { streamCountLock.unlock() }
+        return activeMJPEGStreamCount
+    }
+
+    private func incrementActiveMJPEGStreamCount() {
+        streamCountLock.lock()
+        activeMJPEGStreamCount += 1
+        streamCountLock.unlock()
+    }
+
+    private func decrementActiveMJPEGStreamCount() {
+        streamCountLock.lock()
+        activeMJPEGStreamCount = max(activeMJPEGStreamCount - 1, 0)
+        streamCountLock.unlock()
     }
 
     private func send(_ data: Data, on connection: NWConnection) async -> NWError? {
@@ -394,12 +463,21 @@ final class LatestImageHTTPServer {
         return (method: method, path: path, omitBody: method == "HEAD")
     }
 
-    private static func placeholderImageJPEGData() -> Data {
+    private static func placeholderImageJPEGData(style: MJPEGPlaceholderStyle) -> Data {
         let size = CGSize(width: 1280, height: 720)
         let renderer = UIGraphicsImageRenderer(size: size)
         let image = renderer.image { context in
             let bounds = CGRect(origin: .zero, size: size)
-            UIColor.systemGray3.setFill()
+            UIColor.systemGray4.setFill()
+            context.fill(bounds)
+
+            switch style {
+            case .waitingForFirstImage:
+                UIColor.systemGreen.withAlphaComponent(0.12).setFill()
+            case .cameraOff:
+                UIColor.systemRed.withAlphaComponent(0.06).setFill()
+            }
+
             context.fill(bounds)
 
             let symbolConfiguration = UIImage.SymbolConfiguration(pointSize: 180, weight: .regular)
@@ -485,13 +563,18 @@ final class LatestImageHTTPServer {
 }
 
 private enum MJPEGFrameIdentity: Equatable {
-    case idlePlaceholder
+    case placeholder(MJPEGPlaceholderStyle)
     case latestImage(path: String, modificationTimeIntervalSinceReferenceDate: TimeInterval)
 }
 
 private enum MJPEGFrameUpdate {
     case noChange
     case frame(identity: MJPEGFrameIdentity, imageData: Data)
+}
+
+private enum MJPEGPlaceholderStyle: Equatable {
+    case waitingForFirstImage
+    case cameraOff
 }
 
 enum DeviceIPAddressProvider {

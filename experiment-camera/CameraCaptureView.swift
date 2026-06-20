@@ -252,6 +252,7 @@ final class CameraCaptureService: ObservableObject {
             camera: .init(
                 isFilming: isRunning,
                 wantsToRun: wantsToRun,
+                status: "not_streaming",
                 captureIntervalSeconds: Int(captureInterval.rounded()),
                 captureCount: captureCount,
                 lastCaptureAt: lastCaptureDate.map(formatter.string(from:)),
