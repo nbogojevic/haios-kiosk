@@ -24,6 +24,7 @@ struct DeviceInfoSnapshot: Encodable {
         let captureIntervalSeconds: Int
         let captureCount: Int
         let lastCaptureAt: String?
+        let hasCapturedImageSinceStart: Bool
         let errorMessage: String?
     }
 
@@ -47,6 +48,7 @@ struct DeviceInfoSnapshot: Encodable {
             captureIntervalSeconds: 0,
             captureCount: 0,
             lastCaptureAt: nil,
+            hasCapturedImageSinceStart: false,
             errorMessage: "Camera status is unavailable."
         )
     )
@@ -69,9 +71,36 @@ struct DeviceInfoSnapshot: Encodable {
                 captureIntervalSeconds: camera.captureIntervalSeconds,
                 captureCount: camera.captureCount,
                 lastCaptureAt: camera.lastCaptureAt,
+                hasCapturedImageSinceStart: camera.hasCapturedImageSinceStart,
                 errorMessage: camera.errorMessage
             )
         )
+    }
+}
+
+enum MJPEGStreamState: Equatable {
+    case cameraOff
+    case waitingForFirstImage
+    case live
+
+    init(cameraInfo: DeviceInfoSnapshot.CameraInfo) {
+        guard cameraInfo.isFilming else {
+            self = .cameraOff
+            return
+        }
+
+        self = cameraInfo.hasCapturedImageSinceStart ? .live : .waitingForFirstImage
+    }
+
+    var cameraStatus: String {
+        switch self {
+        case .cameraOff:
+            "streaming_camera_off"
+        case .waitingForFirstImage:
+            "streaming_waiting_for_first_image"
+        case .live:
+            "streaming_live"
+        }
     }
 }
 
@@ -354,10 +383,17 @@ final class LatestImageHTTPServer {
         cameraOffPlaceholder: Data
     ) async -> MJPEGFrameUpdate {
         let info = await infoProvider?() ?? .unavailable
+        let streamState = MJPEGStreamState(cameraInfo: info.camera)
 
-        guard info.camera.isFilming else {
+        switch streamState {
+        case .cameraOff:
             let identity: MJPEGFrameIdentity = .placeholder(.cameraOff)
             return .frame(identity: identity, imageData: cameraOffPlaceholder)
+        case .waitingForFirstImage:
+            let identity: MJPEGFrameIdentity = .placeholder(.waitingForFirstImage)
+            return .frame(identity: identity, imageData: waitingForFirstImagePlaceholder)
+        case .live:
+            break
         }
 
         do {
@@ -388,17 +424,7 @@ final class LatestImageHTTPServer {
             return "not_streaming"
         }
 
-        guard info.camera.isFilming else {
-            return "streaming_camera_off"
-        }
-
-        do {
-            return try LatestCaptureFileLocator.latestImageFile() == nil
-                ? "streaming_waiting_for_first_image"
-                : "streaming_live"
-        } catch {
-            return "streaming_waiting_for_first_image"
-        }
+        return MJPEGStreamState(cameraInfo: info.camera).cameraStatus
     }
 
     private func currentActiveMJPEGStreamCount() -> Int {
@@ -480,7 +506,7 @@ final class LatestImageHTTPServer {
 
             let title = switch style {
             case .waitingForFirstImage:
-                "Waiting"
+                "Waiting..."
             case .cameraOff:
                 "Camera Off"
             }

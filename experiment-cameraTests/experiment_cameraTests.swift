@@ -50,4 +50,44 @@ struct experiment_cameraTests {
 
         #expect(removedFiles.isEmpty)
     }
+
+    @Test func mjpegStreamStateWaitsForCurrentSessionFirstImage() {
+        let waitingCameraInfo = DeviceInfoSnapshot.CameraInfo(
+            isFilming: true,
+            wantsToRun: true,
+            status: "not_streaming",
+            captureIntervalSeconds: 1,
+            captureCount: 4,
+            lastCaptureAt: "2026-06-20T08:30:00Z",
+            hasCapturedImageSinceStart: false,
+            errorMessage: nil
+        )
+        let liveCameraInfo = DeviceInfoSnapshot.CameraInfo(
+            isFilming: true,
+            wantsToRun: true,
+            status: "not_streaming",
+            captureIntervalSeconds: 1,
+            captureCount: 5,
+            lastCaptureAt: "2026-06-20T08:30:10Z",
+            hasCapturedImageSinceStart: true,
+            errorMessage: nil
+        )
+        let cameraOffInfo = DeviceInfoSnapshot.CameraInfo(
+            isFilming: false,
+            wantsToRun: false,
+            status: "not_streaming",
+            captureIntervalSeconds: 1,
+            captureCount: 5,
+            lastCaptureAt: "2026-06-20T08:30:10Z",
+            hasCapturedImageSinceStart: true,
+            errorMessage: nil
+        )
+
+        #expect(MJPEGStreamState(cameraInfo: waitingCameraInfo) == .waitingForFirstImage)
+        #expect(MJPEGStreamState(cameraInfo: waitingCameraInfo).cameraStatus == "streaming_waiting_for_first_image")
+        #expect(MJPEGStreamState(cameraInfo: liveCameraInfo) == .live)
+        #expect(MJPEGStreamState(cameraInfo: liveCameraInfo).cameraStatus == "streaming_live")
+        #expect(MJPEGStreamState(cameraInfo: cameraOffInfo) == .cameraOff)
+        #expect(MJPEGStreamState(cameraInfo: cameraOffInfo).cameraStatus == "streaming_camera_off")
+    }
 }

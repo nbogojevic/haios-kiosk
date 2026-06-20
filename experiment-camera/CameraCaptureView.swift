@@ -74,6 +74,7 @@ final class CameraCaptureService: ObservableObject {
     @Published private(set) var isRunning = false
     @Published private(set) var wantsToRun = false
     @Published private(set) var lastCaptureDate: Date?
+    @Published private(set) var hasCapturedImageSinceSessionStart = false
     @Published private(set) var errorMessage: String?
 
     private let sessionController = CaptureSessionController()
@@ -214,6 +215,7 @@ final class CameraCaptureService: ObservableObject {
                 return
             }
 
+            hasCapturedImageSinceSessionStart = false
             scheduleTimedCaptures(capturingImmediately: true)
         } catch {
             errorMessage = error.localizedDescription
@@ -225,6 +227,7 @@ final class CameraCaptureService: ObservableObject {
         timer?.invalidate()
         timer = nil
         isRunning = false
+        hasCapturedImageSinceSessionStart = false
 
         _ = await sessionController.stop()
     }
@@ -260,6 +263,7 @@ final class CameraCaptureService: ObservableObject {
         case let .success((timestamp, imagePath)):
             captureCount += 1
             lastCaptureDate = timestamp
+            hasCapturedImageSinceSessionStart = true
             onCapture?(timestamp, imagePath)
         case let .failure(error):
             errorMessage = error.localizedDescription
@@ -306,6 +310,7 @@ final class CameraCaptureService: ObservableObject {
                 captureIntervalSeconds: Int(captureInterval.rounded()),
                 captureCount: captureCount,
                 lastCaptureAt: lastCaptureDate.map(formatter.string(from:)),
+                hasCapturedImageSinceStart: hasCapturedImageSinceSessionStart,
                 errorMessage: errorMessage
             )
         )
