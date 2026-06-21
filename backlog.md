@@ -1,3 +1,4 @@
 - [ ] Check why old images dissappear after restart of app from debugger. Settings however remain.
 - [ ] Implement different logic for preserving images.
 - [ ] Implement microphone capture and audio recording.
+- [ ] Check if delayed capture of first image is needed (see scheduleTimedCaptures)

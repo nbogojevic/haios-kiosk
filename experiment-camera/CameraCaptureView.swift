@@ -137,8 +137,7 @@ enum DeviceCameraOrientation: CaseIterable, Sendable {
 
 @MainActor
 final class CameraCaptureService: ObservableObject {
-    private static let initialCaptureDelay: TimeInterval = 10
-    private static let latestImageServerPort: UInt16 = 2112
+    private static let imageServerPort: UInt16 = 2112
 
     @Published private(set) var authorizationDenied = false
     @Published private(set) var captureCount = 0
@@ -150,7 +149,7 @@ final class CameraCaptureService: ObservableObject {
     @Published private(set) var errorMessage: String?
 
     private let sessionController = CaptureSessionController()
-    private let latestImageServer = LatestImageHTTPServer(port: latestImageServerPort)
+    private let latestImageServer = ImageHTTPServer(port: imageServerPort)
     private var onCapture: ((Date, String) -> Void)?
     private var timer: Timer?
     private var currentOrientation = DeviceCameraOrientation.current()
@@ -205,7 +204,7 @@ final class CameraCaptureService: ObservableObject {
 
     var statusMessage: String {
         if authorizationDenied {
-            return "Allow camera access in Settings to capture an image every \(captureIntervalDescription). Latest saved image remains available at at webserver listening on port \(Self.latestImageServerPort) while the app is running. The service is advertised over Bonjour."
+            return "Allow camera access in Settings to capture an image every \(captureIntervalDescription). Latest saved image remains available at at webserver listening on port \(Self.imageServerPort) while the app is running. The service is advertised over Bonjour."
         }
 
         if let errorMessage, !errorMessage.isEmpty {
@@ -341,7 +340,7 @@ final class CameraCaptureService: ObservableObject {
         }
 
         if capturingImmediately {
-            timer?.fireDate = Date().addingTimeInterval(Self.initialCaptureDelay)
+            timer?.fireDate = Date().addingTimeInterval(captureInterval)
         }
     }
 

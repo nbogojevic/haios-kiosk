@@ -121,7 +121,7 @@ extension UIDevice.BatteryState {
     }
 }
 
-final class LatestImageHTTPServer {
+final class ImageHTTPServer {
     nonisolated static let serviceType = "_latestimg._tcp"
     nonisolated private static let infoPath = "/info"
     nonisolated private static let latestImagePath = "/latestImage.jpg"
