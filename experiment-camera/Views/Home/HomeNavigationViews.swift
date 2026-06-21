@@ -92,7 +92,8 @@ struct CameraControlView: View {
 
     private func previewHeight(in proxy: GeometryProxy) -> CGFloat {
         if cameraService.isRunning, isLandscapeLayout(in: proxy) {
-            return max(proxy.size.height * 0.6, 220)
+            // Keep preview compact on short landscape screens.
+            return max(min(proxy.size.height * 0.45, 190), 150)
         }
 
         return max(proxy.size.height / 3, 180)
