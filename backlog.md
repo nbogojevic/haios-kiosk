@@ -8,17 +8,6 @@ Add UDP support for RTSP.
 - [ ] Capture images and video when movement is detected.
 - [ ] Check if tiered and storage logic work.
 
-Issue 1
-
-Title: Restrict BrowserSession to safe URL schemes
-
-Lines:/home/runner/work/haios-kiosk/haios-kiosk/experiment-camera/Views/Web/WebBrowserView.swift:353-367
-
-Problem:normalizedURL(from:) accepts any URL that has a scheme, including non-web schemes such as file: and javascript:.
-
-Impact:This can allow unintended or unsafe content to be loaded in WKWebView.
-
-Recommendation:Allow only http and https URLs. Reject all other schemes and add tests for accepted and rejected inputs.
 
 
 Issue 2
@@ -32,19 +21,6 @@ Problem:The /info, /latestImage.jpg, /mjpeg, and /camera endpoints are accessibl
 Impact:Any device on the same network may be able to read camera data or control camera state.
 
 Recommendation:Add authentication or a shared secret, or make these endpoints opt-in behind an explicit configuration.
-
-
-Issue 3
-
-Title: HTTP request parsing is unsafe for fragmented TCP requests
-
-Lines:/home/runner/work/haios-kiosk/haios-kiosk/experiment-camera/CameraCaptureNetworking.swift:279-331/home/runner/work/haios-kiosk/haios-kiosk/experiment-camera/CameraCaptureNetworking.swift:568-597
-
-Problem:The server assumes a single receive call contains the complete HTTP request, including headers and body.
-
-Impact:Requests may fail intermittently when data arrives in multiple TCP packets, especially for POST requests.
-
-Recommendation:Read until the full header block is received, parse Content-Length, and continue reading until the full request body is available.
 
 
 Issue 4

@@ -278,59 +278,97 @@ final class ImageHTTPServer {
         connection.start(queue: connectionQueue)
     }
 
-    nonisolated private func receiveRequest(on connection: NWConnection) {
-        connection.receive(minimumIncompleteLength: 1, maximumLength: 8_192) { [weak self] data, _, _, error in
+    nonisolated private static let maxHTTPRequestBytes = 256 * 1_024
+
+    nonisolated private func receiveRequest(on connection: NWConnection, accumulatedData: Data = Data()) {
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 8_192) { [weak self] data, _, isComplete, error in
+            guard let self else {
+                connection.cancel()
+                return
+            }
+
             Task {
-                guard let request = Self.parseRequest(from: data, error: error) else {
-                    let response = Self.errorResponse(status: "400 Bad Request", message: "The request was empty.")
+                guard error == nil else {
+                    let response = Self.errorResponse(status: "400 Bad Request", message: "The request could not be read.")
                     connection.send(content: response, completion: .contentProcessed { _ in
                         connection.cancel()
                     })
                     return
                 }
 
-                if request.path == Self.cameraPath {
-                    let response = await self?.cameraResponse(for: request)
-                        ?? Self.errorResponse(status: "500 Internal Server Error", message: "The camera endpoint is unavailable.")
+                var bufferedData = accumulatedData
+                if let data {
+                    bufferedData.append(data)
+                }
 
+                if bufferedData.count > Self.maxHTTPRequestBytes {
+                    let response = Self.errorResponse(status: "413 Payload Too Large", message: "The request exceeded the maximum supported size.")
                     connection.send(content: response, completion: .contentProcessed { _ in
                         connection.cancel()
                     })
                     return
                 }
 
-                guard request.method == "GET" || request.method == "HEAD" else {
-                    let body = Data("Only GET and HEAD are supported.".utf8)
-                    let response = Self.response(
-                        status: "405 Method Not Allowed",
-                        headers: [
-                            "Allow": "GET, HEAD",
-                            "Content-Type": "text/plain; charset=utf-8"
-                        ],
-                        body: body,
-                        omitBody: request.omitBody,
-                        contentLength: body.count
-                    )
+                switch Self.parseRequest(from: bufferedData) {
+                case let .request(request):
+                    await self.handleRequest(request, on: connection)
+                case .incomplete:
+                    guard !isComplete else {
+                        let response = Self.errorResponse(status: "400 Bad Request", message: "The request ended before all headers or body bytes were received.")
+                        connection.send(content: response, completion: .contentProcessed { _ in
+                            connection.cancel()
+                        })
+                        return
+                    }
 
+                    self.receiveRequest(on: connection, accumulatedData: bufferedData)
+                case .invalid:
+                    let response = Self.errorResponse(status: "400 Bad Request", message: "The request was malformed.")
                     connection.send(content: response, completion: .contentProcessed { _ in
                         connection.cancel()
                     })
-                    return
                 }
-
-                if request.path == Self.mjpegPath {
-                    await self?.streamMJPEG(on: connection, omitBody: request.omitBody)
-                    return
-                }
-
-                let response = await self?.responseData(path: request.path, omitBody: request.omitBody)
-                    ?? Self.errorResponse(status: "500 Internal Server Error", message: "The server could not prepare a response.")
-
-                connection.send(content: response, completion: .contentProcessed { _ in
-                    connection.cancel()
-                })
             }
         }
+    }
+
+    private func handleRequest(_ request: HTTPRequest, on connection: NWConnection) async {
+        if request.path == Self.cameraPath {
+            let response = await cameraResponse(for: request)
+            connection.send(content: response, completion: .contentProcessed { _ in
+                connection.cancel()
+            })
+            return
+        }
+
+        guard request.method == "GET" || request.method == "HEAD" else {
+            let body = Data("Only GET and HEAD are supported.".utf8)
+            let response = Self.response(
+                status: "405 Method Not Allowed",
+                headers: [
+                    "Allow": "GET, HEAD",
+                    "Content-Type": "text/plain; charset=utf-8"
+                ],
+                body: body,
+                omitBody: request.omitBody,
+                contentLength: body.count
+            )
+
+            connection.send(content: response, completion: .contentProcessed { _ in
+                connection.cancel()
+            })
+            return
+        }
+
+        if request.path == Self.mjpegPath {
+            await streamMJPEG(on: connection, omitBody: request.omitBody)
+            return
+        }
+
+        let response = await responseData(path: request.path, omitBody: request.omitBody)
+        connection.send(content: response, completion: .contentProcessed { _ in
+            connection.cancel()
+        })
     }
 
     private func cameraResponse(for request: HTTPRequest) async -> Data {
@@ -567,19 +605,24 @@ final class ImageHTTPServer {
         }
     }
 
-    nonisolated private static func parseRequest(from requestData: Data?, error: NWError?) -> HTTPRequest? {
-        guard error == nil,
-              let requestData,
-              let request = String(data: requestData, encoding: .utf8),
-              let headerDelimiterRange = request.range(of: "\r\n\r\n"),
-              let requestLine = request.components(separatedBy: "\r\n").first,
-              !requestLine.isEmpty else {
-            return nil
+    nonisolated private static func parseRequest(from requestData: Data) -> HTTPRequestParseResult {
+        guard let headerDelimiterRange = requestData.range(of: Data("\r\n\r\n".utf8)) else {
+            return .incomplete
         }
 
-        let components = requestLine.split(separator: " ")
+        let headerBlock = requestData[..<headerDelimiterRange.lowerBound]
+        guard let headerText = String(data: headerBlock, encoding: .utf8) else {
+            return .invalid
+        }
+
+        let lines = headerText.components(separatedBy: "\r\n")
+        guard let requestLine = lines.first, !requestLine.isEmpty else {
+            return .invalid
+        }
+
+        let components = requestLine.split(separator: " ", omittingEmptySubsequences: true)
         guard components.count >= 2 else {
-            return nil
+            return .invalid
         }
 
         let method = String(components[0]).uppercased()
@@ -589,13 +632,47 @@ final class ImageHTTPServer {
             .map(String.init)
             ?? rawPath
 
-        let bodyString = String(request[headerDelimiterRange.upperBound...])
+        var contentLength = 0
+        for line in lines.dropFirst() {
+            let headerParts = line.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)
+            guard headerParts.count == 2 else {
+                continue
+            }
 
-        return HTTPRequest(
-            method: method,
-            path: path,
-            body: Data(bodyString.utf8),
-            omitBody: method == "HEAD"
+            let name = String(headerParts[0]).trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            guard name == "content-length" else {
+                continue
+            }
+
+            let rawValue = String(headerParts[1]).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let parsedLength = Int(rawValue), parsedLength >= 0 else {
+                return .invalid
+            }
+
+            contentLength = parsedLength
+            break
+        }
+
+        let bodyStartIndex = headerDelimiterRange.upperBound
+        let requiredByteCount = bodyStartIndex + contentLength
+        guard requestData.count >= requiredByteCount else {
+            return .incomplete
+        }
+
+        let body: Data
+        if contentLength == 0 {
+            body = Data()
+        } else {
+            body = requestData.subdata(in: bodyStartIndex..<requiredByteCount)
+        }
+
+        return .request(
+            HTTPRequest(
+                method: method,
+                path: path,
+                body: body,
+                omitBody: method == "HEAD"
+            )
         )
     }
 
@@ -1710,6 +1787,12 @@ private struct HTTPRequest {
         let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
     }
+}
+
+private enum HTTPRequestParseResult {
+    case request(HTTPRequest)
+    case incomplete
+    case invalid
 }
 
 struct RTSPRequest {
