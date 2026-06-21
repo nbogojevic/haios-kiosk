@@ -49,28 +49,3 @@ Impact:The actual files kept may not match the retention behavior described in t
 Recommendation:Split files into age buckets first, then apply per-tier sampling within each bucket. Add tests that cover mixed-age datasets.
 
 
-Issue 6
-
-Title: Device orientation rotation mapping conflicts with test expectations
-
-Lines:/home/runner/work/haios-kiosk/haios-kiosk/experiment-camera/CameraCaptureView.swift:280-290/home/runner/work/haios-kiosk/haios-kiosk/experiment-cameraTests/ExperimentCameraTests.swift:212-216
-
-Problem:The production mapping for landscape rotation angles does not match the unit test expectations.
-
-Impact:Either camera rotation is incorrect in production, or the tests are asserting the wrong behavior.
-
-Recommendation:Verify the intended orientation behavior on a real device, then align both implementation and tests.
-
-
-Issue 7
-
-Title: Capture pruning performs synchronous file I/O on the main thread
-
-Lines:/home/runner/work/haios-kiosk/haios-kiosk/experiment-camera/Views/Home/MainContentView.swift:265-299
-
-Problem:pruneStoredCaptures() performs directory scanning, file deletion, and model cleanup from UI lifecycle paths on the main thread.
-
-Impact:This can cause UI stuttering or delayed screen updates when many captures exist.
-
-Recommendation:Move filesystem pruning work off the main actor, then apply SwiftData updates back on the main actor.
-

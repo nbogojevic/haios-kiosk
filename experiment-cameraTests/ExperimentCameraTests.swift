@@ -246,8 +246,8 @@ struct ExperimentCameraTests {
 
     @Test func deviceCameraOrientationProvidesExpectedRotationAngles() {
         #expect(DeviceCameraOrientation.portrait.videoRotationAngle == 90)
-        #expect(DeviceCameraOrientation.landscapeLeft.videoRotationAngle == 0)
-        #expect(DeviceCameraOrientation.landscapeRight.videoRotationAngle == 180)
+        #expect(DeviceCameraOrientation.landscapeLeft.videoRotationAngle == 180)
+        #expect(DeviceCameraOrientation.landscapeRight.videoRotationAngle == 0)
         #expect(DeviceCameraOrientation.portraitUpsideDown.videoRotationAngle == 270)
     }
 

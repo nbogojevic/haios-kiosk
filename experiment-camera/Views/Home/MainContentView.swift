@@ -31,6 +31,7 @@ struct ContentView: View {
     @State private var showingSettings = false
     @State private var didConfigureInitialState = false
     @State private var navigationPath: [AppDestination] = []
+    @State private var pruneTask: Task<Void, Never>?
 
     @AppStorage("screenSaverSeconds") private var screenSaverSeconds = 45
     @AppStorage("screenDimDelaySeconds") private var screenDimDelaySeconds = 30
@@ -151,23 +152,19 @@ struct ContentView: View {
             browserSession.loadInitialPageIfNeeded()
         }
         .onChange(of: maxRetainedImages) { _, _ in
-            withAnimation {
-                pruneStoredCaptures()
-            }
+            pruneStoredCaptures()
         }
         .onChange(of: captureRetentionModeRawValue) { _, _ in
-            withAnimation {
-                pruneStoredCaptures()
-            }
+            pruneStoredCaptures()
         }
         .onChange(of: maxRetainedImageStorageMB) { _, _ in
-            withAnimation {
-                pruneStoredCaptures()
-            }
+            pruneStoredCaptures()
         }
         .onDisappear {
             updateIdleTimerState(isIdleTimerDisabled: false)
             cameraService.clearCaptureHandler()
+            pruneTask?.cancel()
+            pruneTask = nil
         }
         .onChange(of: scenePhase) { _, newPhase in
             switch newPhase {
@@ -263,10 +260,27 @@ struct ContentView: View {
     }
 
     private func pruneStoredCaptures() {
+        pruneTask?.cancel()
+
         let capturesDirectory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Captures", isDirectory: true)
-        _ = try? CaptureRetentionPolicy.pruneCapturedImages(in: capturesDirectory, keepingNewest: maxRetainedImages)
+        let retainedImageCount = maxRetainedImages
 
+        pruneTask = Task(priority: .utility) {
+            _ = try? CaptureRetentionPolicy.pruneCapturedImages(in: capturesDirectory, keepingNewest: retainedImageCount)
+            let existingImagePaths = Self.capturedImagePaths(in: capturesDirectory)
+
+            guard !Task.isCancelled else {
+                return
+            }
+
+            await MainActor.run {
+                applyStoredCapturePruning(existingImagePaths: existingImagePaths, capturesDirectory: capturesDirectory)
+            }
+        }
+    }
+
+    private func applyStoredCapturePruning(existingImagePaths: Set<String>, capturesDirectory: URL) {
         let descriptor = FetchDescriptor<Item>(sortBy: [SortDescriptor(\Item.timestamp, order: .reverse)])
 
         guard let storedItems = try? modelContext.fetch(descriptor) else {
@@ -276,19 +290,20 @@ struct ContentView: View {
         var didChangeModel = false
 
         for item in storedItems {
-            if let resolvedImageURL = item.resolvedImageURL,
-               item.imagePath != resolvedImageURL.path {
-                item.imagePath = resolvedImageURL.path
+            let hadStoredPath = item.imagePath != nil
+            let resolvedPath = resolvedImagePath(
+                from: item.imagePath,
+                existingImagePaths: existingImagePaths,
+                capturesDirectory: capturesDirectory
+            )
+
+            if item.imagePath != resolvedPath {
+                item.imagePath = resolvedPath
                 didChangeModel = true
             }
 
-            let hasMissingImage = item.imagePath != nil && item.resolvedImageURL == nil
-            guard hasMissingImage else {
+            guard hadStoredPath, resolvedPath == nil else {
                 continue
-            }
-
-            if let imageURL = item.resolvedImageURL {
-                try? FileManager.default.removeItem(at: imageURL)
             }
 
             modelContext.delete(item)
@@ -298,6 +313,49 @@ struct ContentView: View {
         if didChangeModel {
             try? modelContext.save()
         }
+    }
+
+    private static func capturedImagePaths(in capturesDirectory: URL) -> Set<String> {
+        guard let urls = try? FileManager.default.contentsOfDirectory(
+            at: capturesDirectory,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        ) else {
+            return []
+        }
+
+        return Set(
+            urls
+                .filter { ["jpg", "jpeg"].contains($0.pathExtension.lowercased()) }
+                .map(\.path)
+        )
+    }
+
+    private func resolvedImagePath(
+        from storedPath: String?,
+        existingImagePaths: Set<String>,
+        capturesDirectory: URL
+    ) -> String? {
+        guard let storedPath, !storedPath.isEmpty else {
+            return nil
+        }
+
+        if let fileURL = URL(string: storedPath), fileURL.isFileURL {
+            if existingImagePaths.contains(fileURL.path) {
+                return fileURL.path
+            }
+
+            let fallbackPath = capturesDirectory.appendingPathComponent(fileURL.lastPathComponent).path
+            return existingImagePaths.contains(fallbackPath) ? fallbackPath : nil
+        }
+
+        let pathURL = URL(fileURLWithPath: storedPath)
+        if existingImagePaths.contains(pathURL.path) {
+            return pathURL.path
+        }
+
+        let fallbackPath = capturesDirectory.appendingPathComponent(pathURL.lastPathComponent).path
+        return existingImagePaths.contains(fallbackPath) ? fallbackPath : nil
     }
 
     private func showDestination(_ destination: AppDestination) {
