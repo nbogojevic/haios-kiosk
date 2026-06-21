@@ -19,6 +19,8 @@ private enum AppDestination: Hashable {
 struct ContentView: View {
     @AppStorage("captureIntervalSeconds") private var captureIntervalSeconds = 10
     @AppStorage(CaptureRetentionPolicy.storageKey) private var maxRetainedImages = CaptureRetentionPolicy.defaultMaxRetainedImages
+    @AppStorage(CaptureRetentionPolicy.modeStorageKey) private var captureRetentionModeRawValue = CaptureRetentionPolicy.defaultMode.rawValue
+    @AppStorage(CaptureRetentionPolicy.maxStorageMBStorageKey) private var maxRetainedImageStorageMB = CaptureRetentionPolicy.defaultMaxRetainedImageStorageMB
     @AppStorage("startCameraOnLaunch") private var startCameraOnLaunch = false
     @AppStorage(BrowserSession.startupURLStorageKey) private var startupURLString = BrowserSession.defaultStartupURLString
 
@@ -125,7 +127,7 @@ struct ContentView: View {
 
                 browserSession.loadInitialPageIfNeeded()
                 cameraService.setCaptureInterval(seconds: captureIntervalSeconds)
-                pruneStoredCaptures(keepingNewest: maxRetainedImages)
+                pruneStoredCaptures()
                 cameraService.setCaptureHandler { timestamp, imagePath in
                     withAnimation {
                         insertCapturedItem(timestamp: timestamp, imagePath: imagePath)
@@ -148,9 +150,19 @@ struct ContentView: View {
         .onChange(of: startupURLString) { _, _ in
             browserSession.loadInitialPageIfNeeded()
         }
-        .onChange(of: maxRetainedImages) { _, newValue in
+        .onChange(of: maxRetainedImages) { _, _ in
             withAnimation {
-                pruneStoredCaptures(keepingNewest: newValue)
+                pruneStoredCaptures()
+            }
+        }
+        .onChange(of: captureRetentionModeRawValue) { _, _ in
+            withAnimation {
+                pruneStoredCaptures()
+            }
+        }
+        .onChange(of: maxRetainedImageStorageMB) { _, _ in
+            withAnimation {
+                pruneStoredCaptures()
             }
         }
         .onDisappear {
@@ -181,6 +193,8 @@ struct ContentView: View {
             SettingsView(
                 captureIntervalSeconds: $captureIntervalSeconds,
                 maxRetainedImages: $maxRetainedImages,
+                captureRetentionModeRawValue: $captureRetentionModeRawValue,
+                maxRetainedImageStorageMB: $maxRetainedImageStorageMB,
                 startCameraOnLaunch: $startCameraOnLaunch,
                 startupURLString: $startupURLString,
                 screenSaverSeconds: $screenSaverSeconds,
@@ -243,12 +257,15 @@ struct ContentView: View {
 
     private func insertCapturedItem(timestamp: Date, imagePath: String) {
         modelContext.insert(Item(timestamp: timestamp, imagePath: imagePath))
-        pruneStoredCaptures(keepingNewest: maxRetainedImages)
+        pruneStoredCaptures()
         try? modelContext.save()
     }
 
-    private func pruneStoredCaptures(keepingNewest limit: Int) {
-        let retainedItemCount = max(limit, 0)
+    private func pruneStoredCaptures() {
+        let capturesDirectory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Captures", isDirectory: true)
+        _ = try? CaptureRetentionPolicy.pruneCapturedImages(in: capturesDirectory, keepingNewest: maxRetainedImages)
+
         let descriptor = FetchDescriptor<Item>(sortBy: [SortDescriptor(\Item.timestamp, order: .reverse)])
 
         guard let storedItems = try? modelContext.fetch(descriptor) else {
@@ -257,16 +274,15 @@ struct ContentView: View {
 
         var didChangeModel = false
 
-        for (index, item) in storedItems.enumerated() {
+        for item in storedItems {
             if let resolvedImageURL = item.resolvedImageURL,
                item.imagePath != resolvedImageURL.path {
                 item.imagePath = resolvedImageURL.path
                 didChangeModel = true
             }
 
-            let exceedsRetentionLimit = index >= retainedItemCount
             let hasMissingImage = item.imagePath != nil && item.resolvedImageURL == nil
-            guard exceedsRetentionLimit || hasMissingImage else {
+            guard hasMissingImage else {
                 continue
             }
 

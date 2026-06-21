@@ -12,6 +12,17 @@ import UIKit
 
 struct ExperimentCameraTests {
     @Test func pruneCapturedImagesKeepsNewestTenJPEGs() throws {
+        let defaults = UserDefaults.standard
+        let previousMode = defaults.string(forKey: CaptureRetentionPolicy.modeStorageKey)
+        defaults.set(CaptureRetentionPolicy.Mode.count.rawValue, forKey: CaptureRetentionPolicy.modeStorageKey)
+        defer {
+            if let previousMode {
+                defaults.set(previousMode, forKey: CaptureRetentionPolicy.modeStorageKey)
+            } else {
+                defaults.removeObject(forKey: CaptureRetentionPolicy.modeStorageKey)
+            }
+        }
+
         let temporaryDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: temporaryDirectory, withIntermediateDirectories: true)
@@ -44,12 +55,109 @@ struct ExperimentCameraTests {
     }
 
     @Test func pruneCapturedImagesReturnsEmptyWhenDirectoryDoesNotExist() throws {
+        let defaults = UserDefaults.standard
+        let previousMode = defaults.string(forKey: CaptureRetentionPolicy.modeStorageKey)
+        defaults.set(CaptureRetentionPolicy.Mode.count.rawValue, forKey: CaptureRetentionPolicy.modeStorageKey)
+        defer {
+            if let previousMode {
+                defaults.set(previousMode, forKey: CaptureRetentionPolicy.modeStorageKey)
+            } else {
+                defaults.removeObject(forKey: CaptureRetentionPolicy.modeStorageKey)
+            }
+        }
+
         let missingDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
 
         let removedFiles = try CaptureRetentionPolicy.pruneCapturedImages(in: missingDirectory)
 
         #expect(removedFiles.isEmpty)
+    }
+
+    @Test func pruneCapturedImagesTieredKeepsEverySixtiethFromOldestTier() throws {
+        let defaults = UserDefaults.standard
+        let previousMode = defaults.string(forKey: CaptureRetentionPolicy.modeStorageKey)
+        let previousStorageMB = defaults.object(forKey: CaptureRetentionPolicy.maxStorageMBStorageKey) as? Int
+        defaults.set(CaptureRetentionPolicy.Mode.tieredAndSize.rawValue, forKey: CaptureRetentionPolicy.modeStorageKey)
+        defaults.set(5_000, forKey: CaptureRetentionPolicy.maxStorageMBStorageKey)
+        defer {
+            if let previousMode {
+                defaults.set(previousMode, forKey: CaptureRetentionPolicy.modeStorageKey)
+            } else {
+                defaults.removeObject(forKey: CaptureRetentionPolicy.modeStorageKey)
+            }
+
+            if let previousStorageMB {
+                defaults.set(previousStorageMB, forKey: CaptureRetentionPolicy.maxStorageMBStorageKey)
+            } else {
+                defaults.removeObject(forKey: CaptureRetentionPolicy.maxStorageMBStorageKey)
+            }
+        }
+
+        let temporaryDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: temporaryDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+
+        let baseDate = Date().addingTimeInterval(-40 * 24 * 60 * 60)
+
+        for index in 0..<120 {
+            let fileURL = temporaryDirectory.appendingPathComponent("frame-\(index).jpg")
+            try Data("image-\(index)".utf8).write(to: fileURL)
+            try FileManager.default.setAttributes(
+                [.modificationDate: baseDate.addingTimeInterval(TimeInterval(index))],
+                ofItemAtPath: fileURL.path
+            )
+        }
+
+        _ = try CaptureRetentionPolicy.pruneCapturedImages(in: temporaryDirectory)
+        let remainingFileNames = try FileManager.default.contentsOfDirectory(atPath: temporaryDirectory.path).sorted()
+
+        #expect(remainingFileNames == ["frame-0.jpg", "frame-60.jpg"])
+    }
+
+    @Test func pruneCapturedImagesTieredRemovesOldestWhenStorageLimitIsExceeded() throws {
+        let defaults = UserDefaults.standard
+        let previousMode = defaults.string(forKey: CaptureRetentionPolicy.modeStorageKey)
+        let previousStorageMB = defaults.object(forKey: CaptureRetentionPolicy.maxStorageMBStorageKey) as? Int
+        defaults.set(CaptureRetentionPolicy.Mode.tieredAndSize.rawValue, forKey: CaptureRetentionPolicy.modeStorageKey)
+        defaults.set(1, forKey: CaptureRetentionPolicy.maxStorageMBStorageKey)
+        defer {
+            if let previousMode {
+                defaults.set(previousMode, forKey: CaptureRetentionPolicy.modeStorageKey)
+            } else {
+                defaults.removeObject(forKey: CaptureRetentionPolicy.modeStorageKey)
+            }
+
+            if let previousStorageMB {
+                defaults.set(previousStorageMB, forKey: CaptureRetentionPolicy.maxStorageMBStorageKey)
+            } else {
+                defaults.removeObject(forKey: CaptureRetentionPolicy.maxStorageMBStorageKey)
+            }
+        }
+
+        let temporaryDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: temporaryDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+
+        let baseDate = Date().addingTimeInterval(-2 * 60 * 60)
+        let payload = Data(repeating: 1, count: 700_000)
+
+        for index in 0..<3 {
+            let fileURL = temporaryDirectory.appendingPathComponent("frame-\(index).jpg")
+            try payload.write(to: fileURL)
+            try FileManager.default.setAttributes(
+                [.modificationDate: baseDate.addingTimeInterval(TimeInterval(index))],
+                ofItemAtPath: fileURL.path
+            )
+        }
+
+        _ = try CaptureRetentionPolicy.pruneCapturedImages(in: temporaryDirectory)
+        let remainingFileNames = try FileManager.default.contentsOfDirectory(atPath: temporaryDirectory.path).sorted()
+
+        #expect(remainingFileNames.count == 1)
+        #expect(remainingFileNames == ["frame-2.jpg"])
     }
 
     @Test func mjpegStreamStateWaitsForCurrentSessionFirstImage() {

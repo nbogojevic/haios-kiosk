@@ -14,10 +14,75 @@ import UIKit
 enum CaptureRetentionPolicy {
     static let storageKey = "maxRetainedImages"
     static let defaultMaxRetainedImages = 300
+    static let modeStorageKey = "captureRetentionMode"
+    static let maxStorageMBStorageKey = "maxRetainedImageStorageMB"
+    static let defaultMaxRetainedImageStorageMB = 100
+
+    enum Mode: String, CaseIterable, Identifiable {
+        case count
+        case tieredAndSize
+
+        var id: String { rawValue }
+
+        var title: String {
+            switch self {
+            case .count:
+                return "Newest count"
+            case .tieredAndSize:
+                return "Tiered + size"
+            }
+        }
+    }
+
+    private struct TierRule {
+        let maxAge: TimeInterval?
+        let stride: Int
+    }
+
+    private struct CapturedImageFile {
+        let url: URL
+        let timestamp: Date
+        let byteSize: Int64
+    }
+
+    static let defaultMode: Mode = .tieredAndSize
 
     static var maxRetainedImages: Int {
         let storedValue = UserDefaults.standard.object(forKey: storageKey) as? Int
         return max(storedValue ?? defaultMaxRetainedImages, 0)
+    }
+
+    static var mode: Mode {
+        guard let rawValue = UserDefaults.standard.string(forKey: modeStorageKey),
+              let configuredMode = Mode(rawValue: rawValue) else {
+            return defaultMode
+        }
+
+        return configuredMode
+    }
+
+    static var maxRetainedImageStorageMB: Int {
+        let storedValue = UserDefaults.standard.object(forKey: maxStorageMBStorageKey) as? Int
+        return max(storedValue ?? defaultMaxRetainedImageStorageMB, 1)
+    }
+
+    static func helperText(
+        for mode: Mode = mode,
+        maxRetainedImages: Int = maxRetainedImages,
+        maxRetainedImageStorageMB: Int = maxRetainedImageStorageMB
+    ) -> String {
+        switch mode {
+        case .count:
+            let count = max(maxRetainedImages, 0)
+            if count == 1 {
+                return "Keep the newest photo and delete older photos."
+            }
+
+            return "Keep the newest \(count) photos and delete older photos."
+        case .tieredAndSize:
+            let clampedStorageMB = max(maxRetainedImageStorageMB, 1)
+            return "Keep all photos from the last 24 hours, then keep every 2nd photo until 7 days, every 10th until 30 days, and every 60th after that. Total storage is capped at \(clampedStorageMB) MB by removing oldest remaining photos."
+        }
     }
 
     static func pruneCapturedImages(
@@ -29,24 +94,51 @@ enum CaptureRetentionPolicy {
             return []
         }
 
-        let retainedImageCount = max(limit, 0)
-        let resourceKeys: Set<URLResourceKey> = [.contentModificationDateKey, .creationDateKey, .isRegularFileKey]
-        let imageFiles = try fileManager.contentsOfDirectory(
+        let imageFiles = try capturedImageFiles(in: directoryURL, fileManager: fileManager)
+        guard !imageFiles.isEmpty else {
+            return []
+        }
+
+        switch mode {
+        case .count:
+            return try pruneByCount(imageFiles, retainedImageCount: max(limit, 0), fileManager: fileManager)
+        case .tieredAndSize:
+            return try pruneByTieredAndSize(imageFiles, fileManager: fileManager)
+        }
+    }
+
+    private static func capturedImageFiles(in directoryURL: URL, fileManager: FileManager) throws -> [CapturedImageFile] {
+        let resourceKeys: Set<URLResourceKey> = [
+            .contentModificationDateKey,
+            .creationDateKey,
+            .isRegularFileKey,
+            .fileSizeKey
+        ]
+
+        return try fileManager.contentsOfDirectory(
             at: directoryURL,
             includingPropertiesForKeys: Array(resourceKeys),
             options: [.skipsHiddenFiles]
         )
         .filter { ["jpg", "jpeg"].contains($0.pathExtension.lowercased()) }
-        .compactMap { fileURL -> (url: URL, timestamp: Date)? in
+        .compactMap { fileURL -> CapturedImageFile? in
             let resourceValues = try? fileURL.resourceValues(forKeys: resourceKeys)
             guard resourceValues?.isRegularFile == true else {
                 return nil
             }
 
             let timestamp = resourceValues?.contentModificationDate ?? resourceValues?.creationDate ?? .distantPast
-            return (url: fileURL, timestamp: timestamp)
+            let byteSize = Int64(resourceValues?.fileSize ?? 0)
+            return CapturedImageFile(url: fileURL, timestamp: timestamp, byteSize: byteSize)
         }
-        .sorted { lhs, rhs in
+    }
+
+    private static func pruneByCount(
+        _ imageFiles: [CapturedImageFile],
+        retainedImageCount: Int,
+        fileManager: FileManager
+    ) throws -> [URL] {
+        let sortedNewestFirst = imageFiles.sorted { lhs, rhs in
             if lhs.timestamp == rhs.timestamp {
                 return lhs.url.lastPathComponent > rhs.url.lastPathComponent
             }
@@ -54,18 +146,84 @@ enum CaptureRetentionPolicy {
             return lhs.timestamp > rhs.timestamp
         }
 
-        guard imageFiles.count > retainedImageCount else {
+        guard sortedNewestFirst.count > retainedImageCount else {
             return []
         }
 
+        return try removeFiles(sortedNewestFirst.dropFirst(retainedImageCount).map(\.url), fileManager: fileManager)
+    }
+
+    private static func pruneByTieredAndSize(_ imageFiles: [CapturedImageFile], fileManager: FileManager) throws -> [URL] {
+        let now = Date()
+        let tierRules = retentionTierRules
+        let sortedOldestFirst = imageFiles.sorted { lhs, rhs in
+            if lhs.timestamp == rhs.timestamp {
+                return lhs.url.lastPathComponent < rhs.url.lastPathComponent
+            }
+
+            return lhs.timestamp < rhs.timestamp
+        }
+
+        var removed = Set<URL>()
+        var keptFiles: [CapturedImageFile] = []
+
+        for (globalIndex, file) in sortedOldestFirst.enumerated() {
+            let age = now.timeIntervalSince(file.timestamp)
+            let stride = strideForAge(age, tierRules: tierRules)
+            if globalIndex.isMultiple(of: stride) {
+                keptFiles.append(file)
+            } else {
+                removed.insert(file.url)
+            }
+        }
+
+        if let maxBytes = maxRetainedImageStorageBytes {
+            var totalKeptBytes = keptFiles.reduce(Int64(0)) { $0 + $1.byteSize }
+            for file in keptFiles where totalKeptBytes > maxBytes {
+                removed.insert(file.url)
+                totalKeptBytes -= file.byteSize
+            }
+        }
+
+        return try removeFiles(Array(removed), fileManager: fileManager)
+    }
+
+    private static func removeFiles(_ files: [URL], fileManager: FileManager) throws -> [URL] {
         var removedFiles: [URL] = []
 
-        for file in imageFiles.dropFirst(retainedImageCount) {
-            try fileManager.removeItem(at: file.url)
-            removedFiles.append(file.url)
+        for fileURL in files {
+            try fileManager.removeItem(at: fileURL)
+            removedFiles.append(fileURL)
         }
 
         return removedFiles
+    }
+
+    private static var maxRetainedImageStorageBytes: Int64? {
+        Int64(maxRetainedImageStorageMB) * 1_048_576
+    }
+
+    private static var retentionTierRules: [TierRule] {
+        [
+            TierRule(maxAge: 24 * 60 * 60, stride: 1),
+            TierRule(maxAge: 7 * 24 * 60 * 60, stride: 2),
+            TierRule(maxAge: 30 * 24 * 60 * 60, stride: 10),
+            TierRule(maxAge: nil, stride: 60)
+        ]
+    }
+
+    private static func strideForAge(_ age: TimeInterval, tierRules: [TierRule]) -> Int {
+        guard let tier = tierRules.first(where: { rule in
+            guard let maxAge = rule.maxAge else {
+                return true
+            }
+
+            return age <= maxAge
+        }) else {
+            return 1
+        }
+
+        return max(tier.stride, 1)
     }
 }
 
@@ -425,7 +583,13 @@ final class CameraCaptureService: ObservableObject {
                 captureCount: captureCount,
                 lastCaptureAt: lastCaptureDate.map(formatter.string(from:)),
                 hasCapturedImageSinceStart: hasCapturedImageSinceSessionStart,
-                errorMessage: errorMessage
+                errorMessage: errorMessage,
+                retention: .init(
+                    mode: CaptureRetentionPolicy.mode.rawValue,
+                    maxRetainedImages: CaptureRetentionPolicy.maxRetainedImages,
+                    maxRetainedImageStorageMB: CaptureRetentionPolicy.maxRetainedImageStorageMB,
+                    helperText: CaptureRetentionPolicy.helperText()
+                )
             )
         )
     }

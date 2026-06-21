@@ -18,6 +18,13 @@ struct DeviceInfoSnapshot: Encodable {
     }
 
     struct CameraInfo: Encodable {
+        struct RetentionInfo: Encodable {
+            let mode: String
+            let maxRetainedImages: Int
+            let maxRetainedImageStorageMB: Int
+            let helperText: String
+        }
+
         let isFilming: Bool
         let wantsToRun: Bool
         let status: String
@@ -26,6 +33,29 @@ struct DeviceInfoSnapshot: Encodable {
         let lastCaptureAt: String?
         let hasCapturedImageSinceStart: Bool
         let errorMessage: String?
+        let retention: RetentionInfo?
+
+        init(
+            isFilming: Bool,
+            wantsToRun: Bool,
+            status: String,
+            captureIntervalSeconds: Int,
+            captureCount: Int,
+            lastCaptureAt: String?,
+            hasCapturedImageSinceStart: Bool,
+            errorMessage: String?,
+            retention: RetentionInfo? = nil
+        ) {
+            self.isFilming = isFilming
+            self.wantsToRun = wantsToRun
+            self.status = status
+            self.captureIntervalSeconds = captureIntervalSeconds
+            self.captureCount = captureCount
+            self.lastCaptureAt = lastCaptureAt
+            self.hasCapturedImageSinceStart = hasCapturedImageSinceStart
+            self.errorMessage = errorMessage
+            self.retention = retention
+        }
     }
 
     let deviceName: String
@@ -49,7 +79,8 @@ struct DeviceInfoSnapshot: Encodable {
             captureCount: 0,
             lastCaptureAt: nil,
             hasCapturedImageSinceStart: false,
-            errorMessage: "Camera status is unavailable."
+                errorMessage: "Camera status is unavailable.",
+                retention: nil
         )
     )
 
@@ -72,7 +103,8 @@ struct DeviceInfoSnapshot: Encodable {
                 captureCount: camera.captureCount,
                 lastCaptureAt: camera.lastCaptureAt,
                 hasCapturedImageSinceStart: camera.hasCapturedImageSinceStart,
-                errorMessage: camera.errorMessage
+                errorMessage: camera.errorMessage,
+                retention: camera.retention
             )
         )
     }

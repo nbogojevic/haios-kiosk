@@ -3,6 +3,8 @@ import SwiftUI
 struct SettingsView: View {
     @Binding var captureIntervalSeconds: Int
     @Binding var maxRetainedImages: Int
+    @Binding var captureRetentionModeRawValue: String
+    @Binding var maxRetainedImageStorageMB: Int
     @Binding var startCameraOnLaunch: Bool
     @Binding var startupURLString: String
     @Binding var screenSaverSeconds: Int
@@ -50,6 +52,16 @@ struct SettingsView: View {
                 }
 
                 Section {
+                    Picker("Retention policy", selection: retentionModeBinding) {
+                        ForEach(CaptureRetentionPolicy.Mode.allCases) { mode in
+                            Text(mode.title).tag(mode)
+                        }
+                    }
+
+                    Text(retentionPolicyHelperText)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
                     Stepper(value: $maxRetainedImages, in: 0...1000) {
                         VStack(alignment: .leading, spacing: 4) {
                             Text("Maximum saved photos")
@@ -59,10 +71,20 @@ struct SettingsView: View {
                                 .foregroundStyle(.secondary)
                         }
                     }
+
+                    Stepper(value: $maxRetainedImageStorageMB, in: 1...5_000) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Maximum storage for photos")
+
+                            Text(storageDescription)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
                 } header: {
                     Text("Storage")
                 } footer: {
-                    Text("Choose how many of the newest photos to keep on disk. Lowering this value immediately removes older saved photos and their entries.")
+                    Text("Newest count keeps only the latest photos up to the selected count. Tiered + size keeps all recent photos, then samples older photos (2nd/10th/60th of all captures) and enforces the size cap.")
                 }
 
                 Section {
@@ -120,7 +142,11 @@ struct SettingsView: View {
     }
 
     private var retentionDescription: String {
-        switch maxRetainedImages {
+        guard retentionModeBinding.wrappedValue == .count else {
+            return "Used only when retention policy is Newest count"
+        }
+
+        return switch maxRetainedImages {
         case 0:
             "Keep no saved photos"
         case 1:
@@ -128,6 +154,30 @@ struct SettingsView: View {
         default:
             "Keep \(maxRetainedImages) saved photos"
         }
+    }
+
+    private var storageDescription: String {
+        if maxRetainedImageStorageMB == 1 {
+            return "Limit stored photos to 1 MB"
+        }
+
+        return "Limit stored photos to \(maxRetainedImageStorageMB) MB"
+    }
+
+    private var retentionModeBinding: Binding<CaptureRetentionPolicy.Mode> {
+        Binding {
+            CaptureRetentionPolicy.Mode(rawValue: captureRetentionModeRawValue) ?? CaptureRetentionPolicy.defaultMode
+        } set: { newMode in
+            captureRetentionModeRawValue = newMode.rawValue
+        }
+    }
+
+    private var retentionPolicyHelperText: String {
+        CaptureRetentionPolicy.helperText(
+            for: retentionModeBinding.wrappedValue,
+            maxRetainedImages: maxRetainedImages,
+            maxRetainedImageStorageMB: maxRetainedImageStorageMB
+        )
     }
 
     private var screenSaverDescription: String {
