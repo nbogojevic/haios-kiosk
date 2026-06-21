@@ -203,6 +203,7 @@ struct ContentView: View {
                 onUserActivity: registerUserActivity
             )
         }
+        .statusBarHidden(isScreenSaverActive)
     }
 
     private var homeView: some View {

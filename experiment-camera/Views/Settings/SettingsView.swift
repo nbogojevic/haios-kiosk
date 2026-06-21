@@ -10,6 +10,7 @@ struct SettingsView: View {
     @Binding var screenSaverSeconds: Int
     @Binding var screenDimDelaySeconds: Int
     @Binding var screenDimBrightnessPercent: Int
+    @State private var totalStoredImageBytes: Int64 = 0
     let onUserActivity: () -> Void
     @Environment(\.dismiss) private var dismiss
 
@@ -17,7 +18,7 @@ struct SettingsView: View {
         NavigationStack {
             Form {
                 Section {
-                    TextField("https://example.com", text: $startupURLString)
+                    TextField("https://home-assitant.local:8123", text: $startupURLString)
                         .textInputAutocapitalization(.never)
                         .keyboardType(.URL)
                         .autocorrectionDisabled()
@@ -76,11 +77,13 @@ struct SettingsView: View {
                         VStack(alignment: .leading, spacing: 4) {
                             Text("Maximum storage for photos")
 
-                            Text(storageDescription)
+                            Text(totalStorageDescription)
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
                     }
+
+
                 } header: {
                     Text("Storage")
                 } footer: {
@@ -124,6 +127,9 @@ struct SettingsView: View {
                 }
             }
             .trackUserActivity(onUserActivity)
+            .task {
+                await refreshTotalStoredImageBytes()
+            }
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -164,6 +170,13 @@ struct SettingsView: View {
         return "Limit stored photos to \(maxRetainedImageStorageMB) MB"
     }
 
+    private var totalStorageDescription: String {
+        let currentStorage = ByteCountFormatter.string(fromByteCount: totalStoredImageBytes, countStyle: .decimal)
+        let maxStorageBytes = Int64(maxRetainedImageStorageMB) * 1_000_000
+        let configuredMaximum = ByteCountFormatter.string(fromByteCount: maxStorageBytes, countStyle: .decimal)
+        return "Used \(currentStorage) of \(configuredMaximum)"
+    }
+
     private var retentionModeBinding: Binding<CaptureRetentionPolicy.Mode> {
         Binding {
             CaptureRetentionPolicy.Mode(rawValue: captureRetentionModeRawValue) ?? CaptureRetentionPolicy.defaultMode
@@ -198,5 +211,42 @@ struct SettingsView: View {
         }
 
         return "Keep \(screenDimBrightnessPercent)% brightness"
+    }
+
+    private var capturesDirectoryURL: URL {
+        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Captures", isDirectory: true)
+    }
+
+    private func refreshTotalStoredImageBytes() async {
+        let capturesDirectoryURL = capturesDirectoryURL
+        let task = Task.detached(priority: .utility) {
+            totalCapturedImageStorageBytes(in: capturesDirectoryURL)
+        }
+        let totalBytes = await task.value
+
+        totalStoredImageBytes = totalBytes
+    }
+
+    nonisolated private func totalCapturedImageStorageBytes(in directoryURL: URL) -> Int64 {
+        guard FileManager.default.fileExists(atPath: directoryURL.path),
+              let fileURLs = try? FileManager.default.contentsOfDirectory(
+                at: directoryURL,
+                includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey],
+                options: [.skipsHiddenFiles]
+              ) else {
+            return 0
+        }
+
+        return fileURLs
+            .filter { ["jpg", "jpeg"].contains($0.pathExtension.lowercased()) }
+            .reduce(Int64(0)) { total, fileURL in
+                let values = try? fileURL.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey])
+                guard values?.isRegularFile == true else {
+                    return total
+                }
+
+                return total + Int64(values?.fileSize ?? 0)
+            }
     }
 }

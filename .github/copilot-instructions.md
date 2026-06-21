@@ -87,5 +87,5 @@
 
 ## Important point
 
-If any of the changes diverges from this instructions, especially when user asked notify use and propose update to instructions. 
+If any of the changes diverges from this instructions, especially when user asked notify the user and propose update to instructions. 
 When testing in simulator use iPhone SE 2nd generation.

@@ -107,6 +107,18 @@ enum CaptureRetentionPolicy {
         }
     }
 
+    static func totalCapturedImageStorageBytes(
+        in directoryURL: URL,
+        fileManager: FileManager = .default
+    ) -> Int64 {
+        guard fileManager.fileExists(atPath: directoryURL.path),
+              let imageFiles = try? capturedImageFiles(in: directoryURL, fileManager: fileManager) else {
+            return 0
+        }
+
+        return imageFiles.reduce(Int64(0)) { $0 + $1.byteSize }
+    }
+
     private static func capturedImageFiles(in directoryURL: URL, fileManager: FileManager) throws -> [CapturedImageFile] {
         let resourceKeys: Set<URLResourceKey> = [
             .contentModificationDateKey,
@@ -200,7 +212,7 @@ enum CaptureRetentionPolicy {
     }
 
     private static var maxRetainedImageStorageBytes: Int64? {
-        Int64(maxRetainedImageStorageMB) * 1_048_576
+        Int64(maxRetainedImageStorageMB) * 1_000_000
     }
 
     private static var retentionTierRules: [TierRule] {

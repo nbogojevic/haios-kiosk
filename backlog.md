@@ -1,9 +1,10 @@
-- [ ] Add total storage space of images in settings UI below selection of maximum storage space.
-- [ ] Full frame preview when in landscape mode.
 - [ ] Move time display a bit on screen save pixels on screen
-- [ ] Is it possible to hide or dim top status (battery/et/al)
 - [ ] Implement microphone capture and audio recording.
+Investigate possibility to stream video directly to a client. Video would be streamed using rtsp protcol either on existing port 2112 or on port 2113 on path /stream.
+
+Propose approach or approaches to do it. Explain pros and cons.
+
 - [ ] Check if migration logic for resolvedImageUrl and imageUrl is still needed (see didChangeModel).
 - [ ] Detect movement in video stream
 - [ ] Capture images and video when movement is detected.
-- [ ] Check tiered and storage logic work.
+- [ ] Check if tiered and storage logic work.

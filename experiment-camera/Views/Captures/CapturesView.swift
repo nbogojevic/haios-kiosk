@@ -433,12 +433,12 @@ private struct ItemDetailView: View {
 
         let bytes = fileSize.int64Value
 
-        if bytes > 1_048_576 {
-            return String(format: "%.2f MB", Double(bytes) / 1_048_576)
+        if bytes > 1_000_000 {
+            return String(format: "%.2f MB", Double(bytes) / 1_000_000)
         }
 
-        if bytes > 1_024 {
-            return String(format: "%.2f kB", Double(bytes) / 1_024)
+        if bytes > 1_000 {
+            return String(format: "%.2f kB", Double(bytes) / 1_000)
         }
 
         return "\(bytes) bytes"
