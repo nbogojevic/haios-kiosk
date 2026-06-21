@@ -280,4 +280,17 @@ struct ExperimentCameraTests {
 
         #expect(item.resolvedImageURL?.path == currentLocation.path)
     }
+
+    @Test func browserSessionNormalizedURLAcceptsHTTPAndHTTPS() {
+        #expect(BrowserSession.normalizedURL(from: "http://example.com")?.absoluteString == "http://example.com")
+        #expect(BrowserSession.normalizedURL(from: "https://example.com")?.absoluteString == "https://example.com")
+        #expect(BrowserSession.normalizedURL(from: "example.com")?.absoluteString == "https://example.com")
+    }
+
+    @Test func browserSessionNormalizedURLRejectsUnsafeSchemes() {
+        #expect(BrowserSession.normalizedURL(from: "file:///etc/passwd") == nil)
+        #expect(BrowserSession.normalizedURL(from: "javascript:alert(1)") == nil)
+        #expect(BrowserSession.normalizedURL(from: "ftp://example.com") == nil)
+        #expect(BrowserSession.normalizedURL(from: "data:text/html,hello") == nil)
+    }
 }

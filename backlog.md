@@ -12,7 +12,7 @@ Issue 1
 
 Title: Restrict BrowserSession to safe URL schemes
 
-:/home/runner/work/haios-kiosk/haios-kiosk/experiment-camera/Views/Web/WebBrowserView.swift:353-367
+Lines:/home/runner/work/haios-kiosk/haios-kiosk/experiment-camera/Views/Web/WebBrowserView.swift:353-367
 
 Problem:normalizedURL(from:) accepts any URL that has a scheme, including non-web schemes such as file: and javascript:.
 

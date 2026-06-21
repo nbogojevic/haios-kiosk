@@ -350,7 +350,7 @@ final class BrowserSession: ObservableObject {
             ?? URL(string: Self.defaultStartupURLString)
     }
 
-    private static func normalizedURL(from rawValue: String?) -> URL? {
+    nonisolated static func normalizedURL(from rawValue: String?) -> URL? {
         guard let rawValue else {
             return nil
         }
@@ -360,10 +360,18 @@ final class BrowserSession: ObservableObject {
             return nil
         }
 
-        if let url = URL(string: trimmedValue), url.scheme != nil {
+        if let url = URL(string: trimmedValue), let scheme = url.scheme?.lowercased() {
+            guard scheme == "http" || scheme == "https" else {
+                return nil
+            }
+
             return url
         }
 
-        return URL(string: "https://\(trimmedValue)")
+        guard let prefixedURL = URL(string: "https://\(trimmedValue)") else {
+            return nil
+        }
+
+        return prefixedURL
     }
 }
