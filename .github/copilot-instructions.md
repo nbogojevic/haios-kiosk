@@ -82,10 +82,10 @@
 - Preserve existing app behavior unless the prompt requests a behavior change.
 - Favor maintainability and clarity over clever abstractions.
 - Keep changes aligned with the current architecture instead of rewriting major areas.
-- When making UI changes, consider impact on accessibility labels and UI tests.
+- When making UI changes, consider UI tests.
 - When making storage or networking changes, consider compatibility with existing saved data and existing endpoints.
 
 ## Important point
 
-If any of the changes diverges from this instructions, especially when user asked notify the user and propose update to instructions. 
-When testing in simulator use iPhone SE 2nd generation.
+- If any of the changes diverges from this instructions, especially when user asked notify the user and propose update to instructions. 
+- When testing in simulator use iPhone SE 2nd generation.
