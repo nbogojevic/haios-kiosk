@@ -114,6 +114,10 @@ final class CameraCaptureService: ObservableObject {
         wantsToRun ? "stop.circle.fill" : "camera.fill"
     }
 
+    var previewSession: AVCaptureSession {
+        sessionController.previewSession
+    }
+
     var statusTitle: String {
         if authorizationDenied {
             return "Camera access needed"
@@ -351,6 +355,10 @@ private final class CaptureSessionController: @unchecked Sendable {
         set { frameCaptureProcessor.onCapture = newValue }
     }
 
+    var previewSession: AVCaptureSession {
+        session
+    }
+
     func start() async throws -> Bool {
         try await withCheckedThrowingContinuation { continuation in
             sessionQueue.async { [weak self] in
@@ -430,6 +438,7 @@ private final class CaptureSessionController: @unchecked Sendable {
 
         if let connection = videoOutput.connection(with: .video) {
             if connection.isVideoMirroringSupported {
+                connection.automaticallyAdjustsVideoMirroring = false
                 connection.isVideoMirrored = true
             }
 

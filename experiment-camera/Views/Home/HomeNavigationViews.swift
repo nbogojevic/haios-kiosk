@@ -1,4 +1,5 @@
 import SwiftUI
+@preconcurrency import AVFoundation
 
 struct HomeNavigationCardView<Content: View>: View {
     let title: String
@@ -33,24 +34,21 @@ struct CameraControlView: View {
     let onUserActivity: () -> Void
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                CameraStatusCardView(cameraService: cameraService)
+        GeometryReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    CameraStatusCardView(cameraService: cameraService)
 
-                VStack(alignment: .leading, spacing: 12) {
-                    Label("Capture behavior", systemImage: "timer")
-                        .font(.headline)
-
-                    Text("Use the button below to start or stop periodic front-camera captures. The camera keeps using the interval selected in Settings.")
-                        .font(.body)
-                        .foregroundStyle(.secondary)
+                    if cameraService.isRunning {
+                        CameraPreviewCardView(
+                            session: cameraService.previewSession,
+                            previewHeight: max(proxy.size.height / 3, 180)
+                        )
+                    }
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
                 .padding()
-                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .padding()
-            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .trackUserActivity(onUserActivity)
         .navigationTitle("Camera")
@@ -58,9 +56,10 @@ struct CameraControlView: View {
         .safeAreaInset(edge: .bottom) {
             Button(action: toggleCamera) {
                 Label(cameraService.buttonTitle, systemImage: cameraService.buttonIconName)
-                    .frame(maxWidth: .infinity)
+                    .frame(maxWidth: .infinity, minHeight: 28)
             }
             .buttonStyle(.borderedProminent)
+            .controlSize(.large)
             .tint(cameraService.isRunning ? .red : .accentColor)
             .padding(.horizontal)
             .padding(.top, 8)
@@ -79,6 +78,83 @@ struct CameraControlView: View {
                 await cameraService.start()
             }
         }
+    }
+}
+
+private struct CameraPreviewCardView: View {
+    let session: AVCaptureSession
+    let previewHeight: CGFloat
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Label("Live Preview", systemImage: "video")
+                .font(.headline)
+
+            CameraPreviewView(session: session)
+                .frame(maxWidth: .infinity)
+                .frame(height: previewHeight)
+                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .strokeBorder(.quaternary)
+                }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding()
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+}
+
+private struct CameraPreviewView: UIViewRepresentable {
+    let session: AVCaptureSession
+
+    func makeUIView(context: Context) -> CameraPreviewContainerView {
+        let view = CameraPreviewContainerView()
+        view.previewLayer.videoGravity = .resizeAspect
+        view.previewLayer.session = session
+        configureConnection(for: view.previewLayer.connection)
+        return view
+    }
+
+    func updateUIView(_ uiView: CameraPreviewContainerView, context: Context) {
+        if uiView.previewLayer.session !== session {
+            uiView.previewLayer.session = session
+        }
+
+        configureConnection(for: uiView.previewLayer.connection)
+    }
+
+    static func dismantleUIView(_ uiView: CameraPreviewContainerView, coordinator: ()) {
+        uiView.previewLayer.session = nil
+    }
+
+    private func configureConnection(for connection: AVCaptureConnection?) {
+        guard let connection else {
+            return
+        }
+
+        if connection.isVideoMirroringSupported {
+            connection.automaticallyAdjustsVideoMirroring = false
+            connection.isVideoMirrored = true
+        }
+
+        if #available(iOS 17.0, *) {
+            if connection.isVideoRotationAngleSupported(90) {
+                connection.videoRotationAngle = 90
+            }
+        } else if connection.isVideoOrientationSupported {
+            connection.videoOrientation = .portrait
+        }
+    }
+}
+
+private final class CameraPreviewContainerView: UIView {
+    override class var layerClass: AnyClass {
+        AVCaptureVideoPreviewLayer.self
+    }
+
+    var previewLayer: AVCaptureVideoPreviewLayer {
+        layer as! AVCaptureVideoPreviewLayer
     }
 }
 

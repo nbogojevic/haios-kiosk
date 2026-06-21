@@ -67,6 +67,27 @@ final class ExperimentCameraUITests: XCTestCase {
     }
 
     @MainActor
+    func testTappingCaptureRowOpensCaptureDetails() throws {
+        let app = XCUIApplication()
+        app.launchArguments.append("-uiTestSeedCaptureItem")
+        app.launch()
+
+        let openCapturesButton = app.buttons["Open captures"]
+        XCTAssertTrue(openCapturesButton.waitForExistence(timeout: 5))
+        openCapturesButton.tap()
+
+        let capturesNavigationBar = app.navigationBars["Captures"]
+        XCTAssertTrue(capturesNavigationBar.waitForExistence(timeout: 5))
+
+        let captureRow = app.buttons["CaptureRow"].firstMatch
+        XCTAssertTrue(captureRow.waitForExistence(timeout: 5))
+        captureRow.tap()
+
+        let captureNavigationBar = app.navigationBars["Capture"]
+        XCTAssertTrue(captureNavigationBar.waitForExistence(timeout: 5))
+    }
+
+    @MainActor
     func testLaunchPerformance() throws {
         // This measures how long it takes to launch your application.
         measure(metrics: [XCTApplicationLaunchMetric()]) {
