@@ -69,6 +69,72 @@ enum CaptureRetentionPolicy {
     }
 }
 
+enum DeviceCameraOrientation: CaseIterable, Sendable {
+    case portrait
+    case portraitUpsideDown
+    case landscapeLeft
+    case landscapeRight
+
+    init?(deviceOrientation: UIDeviceOrientation) {
+        switch deviceOrientation {
+        case .portrait:
+            self = .portrait
+        case .portraitUpsideDown:
+            self = .portraitUpsideDown
+        case .landscapeLeft:
+            self = .landscapeLeft
+        case .landscapeRight:
+            self = .landscapeRight
+        default:
+            return nil
+        }
+    }
+
+    static func current(fallback: DeviceCameraOrientation = .portrait) -> DeviceCameraOrientation {
+        if let orientation = DeviceCameraOrientation(deviceOrientation: UIDevice.current.orientation) {
+            return orientation
+        }
+
+        return fallback
+    }
+
+    var isLandscape: Bool {
+        switch self {
+        case .landscapeLeft, .landscapeRight:
+            return true
+        case .portrait, .portraitUpsideDown:
+            return false
+        }
+    }
+
+    var videoRotationAngle: CGFloat {
+        switch self {
+        case .portrait:
+            return 90
+        case .portraitUpsideDown:
+            return 270
+        case .landscapeLeft:
+            return 180
+        case .landscapeRight:
+            return 0
+        }
+    }
+
+    @available(iOS, introduced: 13.0, deprecated: 17.0)
+    func applyLegacyVideoOrientation(to connection: AVCaptureConnection) {
+        switch self {
+        case .portrait:
+            connection.videoOrientation = .portrait
+        case .portraitUpsideDown:
+            connection.videoOrientation = .portraitUpsideDown
+        case .landscapeLeft:
+            connection.videoOrientation = .landscapeRight
+        case .landscapeRight:
+            connection.videoOrientation = .landscapeLeft
+        }
+    }
+}
+
 @MainActor
 final class CameraCaptureService: ObservableObject {
     private static let initialCaptureDelay: TimeInterval = 10
@@ -87,9 +153,12 @@ final class CameraCaptureService: ObservableObject {
     private let latestImageServer = LatestImageHTTPServer(port: latestImageServerPort)
     private var onCapture: ((Date, String) -> Void)?
     private var timer: Timer?
+    private var currentOrientation = DeviceCameraOrientation.current()
+    private var isGeneratingOrientationNotifications = false
 
     init() {
         UIDevice.current.isBatteryMonitoringEnabled = true
+        currentOrientation = DeviceCameraOrientation.current(fallback: currentOrientation)
 
         latestImageServer.infoProvider = { [weak self] in
             self?.infoSnapshot() ?? .unavailable
@@ -230,7 +299,9 @@ final class CameraCaptureService: ObservableObject {
         }
 
         do {
-            let didStart = try await sessionController.start()
+            beginGeneratingOrientationNotificationsIfNeeded()
+            let captureOrientation = resolvedCaptureOrientation()
+            let didStart = try await sessionController.start(videoOrientation: captureOrientation)
             isRunning = didStart
 
             guard didStart else {
@@ -251,6 +322,7 @@ final class CameraCaptureService: ObservableObject {
         timer = nil
         isRunning = false
         hasCapturedImageSinceSessionStart = false
+        endGeneratingOrientationNotificationsIfNeeded()
 
         _ = await sessionController.stop()
     }
@@ -278,7 +350,31 @@ final class CameraCaptureService: ObservableObject {
             return
         }
 
-        sessionController.requestCapture()
+        sessionController.requestCapture(with: resolvedCaptureOrientation())
+    }
+
+    private func resolvedCaptureOrientation() -> DeviceCameraOrientation {
+        let orientation = DeviceCameraOrientation.current(fallback: currentOrientation)
+        currentOrientation = orientation
+        return orientation
+    }
+
+    private func beginGeneratingOrientationNotificationsIfNeeded() {
+        guard !isGeneratingOrientationNotifications else {
+            return
+        }
+
+        UIDevice.current.beginGeneratingDeviceOrientationNotifications()
+        isGeneratingOrientationNotifications = true
+    }
+
+    private func endGeneratingOrientationNotificationsIfNeeded() {
+        guard isGeneratingOrientationNotifications else {
+            return
+        }
+
+        UIDevice.current.endGeneratingDeviceOrientationNotifications()
+        isGeneratingOrientationNotifications = false
     }
 
     private func handleCaptureResult(_ result: Result<(Date, String), Error>) {
@@ -341,14 +437,13 @@ final class CameraCaptureService: ObservableObject {
 }
 
 private final class CaptureSessionController: @unchecked Sendable {
-    private static let portraitVideoRotationAngle: CGFloat = 90
-
     private let session = AVCaptureSession()
     private let videoOutput = AVCaptureVideoDataOutput()
     private let videoOutputQueue = DispatchQueue(label: "CameraCaptureService.VideoOutput")
     private let sessionQueue = DispatchQueue(label: "CameraCaptureService.Session")
     private let frameCaptureProcessor = VideoFrameCaptureProcessor()
     private var isConfigured = false
+    private var appliedVideoOrientation: DeviceCameraOrientation?
 
     var onCapture: ((Result<(Date, String), Error>) -> Void)? {
         get { frameCaptureProcessor.onCapture }
@@ -359,7 +454,7 @@ private final class CaptureSessionController: @unchecked Sendable {
         session
     }
 
-    func start() async throws -> Bool {
+    func start(videoOrientation: DeviceCameraOrientation) async throws -> Bool {
         try await withCheckedThrowingContinuation { continuation in
             sessionQueue.async { [weak self] in
                 guard let self else {
@@ -369,6 +464,7 @@ private final class CaptureSessionController: @unchecked Sendable {
 
                 do {
                     try self.configureSessionIfNeeded()
+                    self.applyVideoOrientation(videoOrientation)
 
                     guard !self.session.isRunning else {
                         continuation.resume(returning: true)
@@ -403,8 +499,15 @@ private final class CaptureSessionController: @unchecked Sendable {
         }
     }
 
-    func requestCapture() {
-        frameCaptureProcessor.requestCapture()
+    func requestCapture(with orientation: DeviceCameraOrientation) {
+        sessionQueue.async { [weak self] in
+            guard let self else {
+                return
+            }
+
+            self.applyVideoOrientation(orientation)
+            self.frameCaptureProcessor.requestCapture()
+        }
     }
 
     private func configureSessionIfNeeded() throws {
@@ -436,22 +539,34 @@ private final class CaptureSessionController: @unchecked Sendable {
         videoOutput.setSampleBufferDelegate(frameCaptureProcessor, queue: videoOutputQueue)
         session.addOutput(videoOutput)
 
-        if let connection = videoOutput.connection(with: .video) {
-            if connection.isVideoMirroringSupported {
-                connection.automaticallyAdjustsVideoMirroring = false
-                connection.isVideoMirrored = true
-            }
-
-            if #available(iOS 17.0, *) {
-                if connection.isVideoRotationAngleSupported(Self.portraitVideoRotationAngle) {
-                    connection.videoRotationAngle = Self.portraitVideoRotationAngle
-                }
-            } else if connection.isVideoOrientationSupported {
-                connection.videoOrientation = .portrait
-            }
-        }
+        applyVideoOrientation(.portrait)
 
         isConfigured = true
+    }
+
+    private func applyVideoOrientation(_ orientation: DeviceCameraOrientation) {
+        guard appliedVideoOrientation != orientation else {
+            return
+        }
+
+        guard let connection = videoOutput.connection(with: .video) else {
+            return
+        }
+
+        if connection.isVideoMirroringSupported {
+            connection.automaticallyAdjustsVideoMirroring = false
+            connection.isVideoMirrored = true
+        }
+
+        if #available(iOS 17.0, *) {
+            if connection.isVideoRotationAngleSupported(orientation.videoRotationAngle) {
+                connection.videoRotationAngle = orientation.videoRotationAngle
+            }
+        } else if connection.isVideoOrientationSupported {
+            orientation.applyLegacyVideoOrientation(to: connection)
+        }
+
+        appliedVideoOrientation = orientation
     }
 
     private func frontCameraDevice() throws -> AVCaptureDevice {

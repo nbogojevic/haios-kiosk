@@ -5,15 +5,10 @@
 //  Created by Nenad BOGOJEVIC on 19/06/2026.
 //
 
-// NBO: Run app in background so that camera capture continues to work even when the app is not in the foreground. This may require additional permissions and handling of background tasks.
-// NBO: Increase size of start/stop camera button.
-// NBO: Check why old images dissappear after restart of app from debugger. Settings however remain.
-// NBO: Implement different logic for preserving images.
-// NBO: Implement microphone capture and audio recording.
-
 import SwiftUI
 import SwiftData
 import Combine
+import UIKit
 
 private enum AppDestination: Hashable {
     case web
@@ -123,6 +118,7 @@ struct ContentView: View {
             isScreenSaverActive = false
             isScreenDimmed = false
             screenSaverActivatedAt = nil
+            updateIdleTimerState()
 
             if !didConfigureInitialState {
                 didConfigureInitialState = true
@@ -143,6 +139,9 @@ struct ContentView: View {
                 }
             }
         }
+        .onChange(of: cameraService.isRunning) { _, _ in
+            updateIdleTimerState()
+        }
         .onChange(of: captureIntervalSeconds) { _, newValue in
             cameraService.setCaptureInterval(seconds: newValue)
         }
@@ -155,6 +154,7 @@ struct ContentView: View {
             }
         }
         .onDisappear {
+            updateIdleTimerState(isIdleTimerDisabled: false)
             cameraService.clearCaptureHandler()
         }
         .onChange(of: scenePhase) { _, newPhase in
@@ -164,11 +164,16 @@ struct ContentView: View {
                 Task {
                     await cameraService.resumeIfNeeded()
                 }
-            case .inactive, .background:
+                updateIdleTimerState()
+            case .inactive:
+                updateIdleTimerState()
+            case .background:
                 browserSession.persistCurrentURLIfNeeded()
+                updateIdleTimerState(isIdleTimerDisabled: false)
                 cameraService.pause()
             @unknown default:
                 browserSession.persistCurrentURLIfNeeded()
+                updateIdleTimerState(isIdleTimerDisabled: false)
                 cameraService.pause()
             }
         }
@@ -360,6 +365,14 @@ struct ContentView: View {
     private var screenDimOverlayOpacity: Double {
         let clampedBrightness = min(max(screenDimBrightnessPercent, 0), 100)
         return 1 - (Double(clampedBrightness) / 100.0)
+    }
+
+    private func updateIdleTimerState() {
+        updateIdleTimerState(isIdleTimerDisabled: cameraService.isRunning && scenePhase != .background)
+    }
+
+    private func updateIdleTimerState(isIdleTimerDisabled: Bool) {
+        UIApplication.shared.isIdleTimerDisabled = isIdleTimerDisabled
     }
 }
 

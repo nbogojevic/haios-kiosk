@@ -7,6 +7,7 @@
 
 import Foundation
 import Testing
+import UIKit
 @testable import experiment_camera
 
 struct ExperimentCameraTests {
@@ -89,5 +90,21 @@ struct ExperimentCameraTests {
         #expect(MJPEGStreamState(cameraInfo: liveCameraInfo).cameraStatus == "streaming_live")
         #expect(MJPEGStreamState(cameraInfo: cameraOffInfo) == .cameraOff)
         #expect(MJPEGStreamState(cameraInfo: cameraOffInfo).cameraStatus == "streaming_camera_off")
+    }
+
+    @Test func deviceCameraOrientationMapsAllFourMainDeviceOrientations() {
+        #expect(DeviceCameraOrientation(deviceOrientation: .portrait) == .portrait)
+        #expect(DeviceCameraOrientation(deviceOrientation: .portraitUpsideDown) == .portraitUpsideDown)
+        #expect(DeviceCameraOrientation(deviceOrientation: .landscapeLeft) == .landscapeLeft)
+        #expect(DeviceCameraOrientation(deviceOrientation: .landscapeRight) == .landscapeRight)
+        #expect(DeviceCameraOrientation(deviceOrientation: .faceUp) == nil)
+        #expect(DeviceCameraOrientation(deviceOrientation: .faceDown) == nil)
+    }
+
+    @Test func deviceCameraOrientationProvidesExpectedRotationAngles() {
+        #expect(DeviceCameraOrientation.portrait.videoRotationAngle == 90)
+        #expect(DeviceCameraOrientation.landscapeLeft.videoRotationAngle == 0)
+        #expect(DeviceCameraOrientation.landscapeRight.videoRotationAngle == 180)
+        #expect(DeviceCameraOrientation.portraitUpsideDown.videoRotationAngle == 270)
     }
 }

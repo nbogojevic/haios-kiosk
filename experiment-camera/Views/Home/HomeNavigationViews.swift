@@ -32,18 +32,19 @@ struct CameraControlView: View {
     @ObservedObject var cameraService: CameraCaptureService
     let openWebView: () -> Void
     let onUserActivity: () -> Void
+    @State private var showsLivePreview = false
 
     var body: some View {
         GeometryReader { proxy in
+            let contentLayout = contentLayout(in: proxy)
+
             ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
+                contentLayout {
                     CameraStatusCardView(cameraService: cameraService)
+                        .frame(width: statusCardWidth(in: proxy), alignment: .leading)
 
                     if cameraService.isRunning {
-                        CameraPreviewCardView(
-                            session: cameraService.previewSession,
-                            previewHeight: max(proxy.size.height / 3, 180)
-                        )
+                        previewContent(height: previewHeight(in: proxy))
                     }
                 }
                 .padding()
@@ -53,6 +54,15 @@ struct CameraControlView: View {
         .trackUserActivity(onUserActivity)
         .navigationTitle("Camera")
         .navigationBarTitleDisplayMode(.inline)
+        .onAppear {
+            updatePreviewVisibility(animated: false)
+        }
+        .onDisappear {
+            showsLivePreview = false
+        }
+        .onChange(of: cameraService.isRunning) { _, _ in
+            updatePreviewVisibility(animated: true)
+        }
         .safeAreaInset(edge: .bottom) {
             Button(action: toggleCamera) {
                 Label(cameraService.buttonTitle, systemImage: cameraService.buttonIconName)
@@ -65,6 +75,66 @@ struct CameraControlView: View {
             .padding(.top, 8)
             .padding(.bottom)
             .background(.bar)
+        }
+    }
+
+    private func isLandscapeLayout(in proxy: GeometryProxy) -> Bool {
+        proxy.size.width > proxy.size.height
+    }
+
+    private func statusCardWidth(in proxy: GeometryProxy) -> CGFloat? {
+        guard cameraService.isRunning, isLandscapeLayout(in: proxy) else {
+            return nil
+        }
+
+        return min(max(proxy.size.width * 0.3, 220), 320)
+    }
+
+    private func previewHeight(in proxy: GeometryProxy) -> CGFloat {
+        if cameraService.isRunning, isLandscapeLayout(in: proxy) {
+            return max(proxy.size.height * 0.6, 220)
+        }
+
+        return max(proxy.size.height / 3, 180)
+    }
+
+    private func contentLayout(in proxy: GeometryProxy) -> AnyLayout {
+        if cameraService.isRunning, isLandscapeLayout(in: proxy) {
+            return AnyLayout(HStackLayout(alignment: .top, spacing: 20))
+        }
+
+        return AnyLayout(VStackLayout(alignment: .leading, spacing: 20))
+    }
+
+    @ViewBuilder
+    private func previewContent(height: CGFloat) -> some View {
+        if showsLivePreview {
+            CameraPreviewCardView(
+                session: cameraService.previewSession,
+                previewHeight: height
+            )
+        } else {
+            CameraPreviewPlaceholderCardView(previewHeight: height)
+        }
+    }
+
+    private func updatePreviewVisibility(animated: Bool) {
+        guard cameraService.isRunning else {
+            showsLivePreview = false
+            return
+        }
+
+        if !animated {
+            DispatchQueue.main.async {
+                showsLivePreview = cameraService.isRunning
+            }
+
+            return
+        }
+
+        showsLivePreview = false
+        DispatchQueue.main.async {
+            showsLivePreview = cameraService.isRunning
         }
     }
 
@@ -105,6 +175,35 @@ private struct CameraPreviewCardView: View {
     }
 }
 
+private struct CameraPreviewPlaceholderCardView: View {
+    let previewHeight: CGFloat
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Label("Live Preview", systemImage: "video")
+                .font(.headline)
+
+            ZStack {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(.quaternary.opacity(0.2))
+
+                ProgressView()
+                    .controlSize(.regular)
+            }
+            .frame(maxWidth: .infinity)
+            .frame(height: previewHeight)
+            .overlay {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .strokeBorder(.quaternary)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding()
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+}
+
+@MainActor
 private struct CameraPreviewView: UIViewRepresentable {
     let session: AVCaptureSession
 
@@ -112,7 +211,10 @@ private struct CameraPreviewView: UIViewRepresentable {
         let view = CameraPreviewContainerView()
         view.previewLayer.videoGravity = .resizeAspect
         view.previewLayer.session = session
-        configureConnection(for: view.previewLayer.connection)
+        view.onLayoutChanged = { previewView in
+            configureConnection(for: previewView)
+        }
+        configureConnection(for: view)
         return view
     }
 
@@ -121,15 +223,16 @@ private struct CameraPreviewView: UIViewRepresentable {
             uiView.previewLayer.session = session
         }
 
-        configureConnection(for: uiView.previewLayer.connection)
+        configureConnection(for: uiView)
     }
 
     static func dismantleUIView(_ uiView: CameraPreviewContainerView, coordinator: ()) {
+        uiView.onLayoutChanged = nil
         uiView.previewLayer.session = nil
     }
 
-    private func configureConnection(for connection: AVCaptureConnection?) {
-        guard let connection else {
+    private func configureConnection(for view: CameraPreviewContainerView) {
+        guard let connection = view.previewLayer.connection else {
             return
         }
 
@@ -138,23 +241,46 @@ private struct CameraPreviewView: UIViewRepresentable {
             connection.isVideoMirrored = true
         }
 
+        let orientation = resolvedOrientation(for: view)
+        guard view.appliedOrientation != orientation else {
+            return
+        }
+
         if #available(iOS 17.0, *) {
-            if connection.isVideoRotationAngleSupported(90) {
-                connection.videoRotationAngle = 90
+            if connection.isVideoRotationAngleSupported(orientation.videoRotationAngle) {
+                connection.videoRotationAngle = orientation.videoRotationAngle
             }
         } else if connection.isVideoOrientationSupported {
-            connection.videoOrientation = .portrait
+            orientation.applyLegacyVideoOrientation(to: connection)
         }
+
+        view.appliedOrientation = orientation
+    }
+
+    private func resolvedOrientation(for view: CameraPreviewContainerView) -> DeviceCameraOrientation {
+        if let orientation = DeviceCameraOrientation(deviceOrientation: UIDevice.current.orientation) {
+            return orientation
+        }
+
+        return view.appliedOrientation
     }
 }
 
 private final class CameraPreviewContainerView: UIView {
+    var appliedOrientation: DeviceCameraOrientation = .portrait
+    var onLayoutChanged: ((CameraPreviewContainerView) -> Void)?
+
     override class var layerClass: AnyClass {
         AVCaptureVideoPreviewLayer.self
     }
 
     var previewLayer: AVCaptureVideoPreviewLayer {
         layer as! AVCaptureVideoPreviewLayer
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        onLayoutChanged?(self)
     }
 }
 
