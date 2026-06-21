@@ -49,7 +49,8 @@ struct CapturesView: View {
             ItemDetailView(
                 item: item,
                 openWebView: openWebView,
-                onUserActivity: onUserActivity
+                onUserActivity: onUserActivity,
+                onShareImage: shareImageFromDetailView
             )
         }
         .toolbar {
@@ -205,6 +206,10 @@ struct CapturesView: View {
         }
     }
 
+    private func shareImageFromDetailView(_ imageURL: URL) {
+        shareSheetPayload = ShareSheetPayload(imageURLs: [imageURL]) { @MainActor @Sendable in }
+    }
+
     private func deleteItems(offsets: IndexSet) {
         withAnimation {
             for index in offsets {
@@ -357,6 +362,7 @@ private struct ItemDetailView: View {
     let item: Item
     let openWebView: () -> Void
     let onUserActivity: () -> Void
+    let onShareImage: (URL) -> Void
 
     var body: some View {
         ScrollView {
@@ -391,6 +397,23 @@ private struct ItemDetailView: View {
         .trackUserActivity(onUserActivity)
         .navigationTitle("Capture")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    onUserActivity()
+
+                    guard let imageURL = item.resolvedImageURL else {
+                        return
+                    }
+
+                    onShareImage(imageURL)
+                } label: {
+                    Image(systemName: "square.and.arrow.up")
+                }
+                .accessibilityLabel("Share captured image")
+                .disabled(item.resolvedImageURL == nil)
+            }
+        }
     }
 
     private var image: UIImage? {

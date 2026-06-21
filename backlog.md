@@ -1,7 +1,6 @@
-- [ ] Add splash screen to the app.
-- [ ] Add share to single image view
+- [ ] Add total storage space of images in settings UI below selection of maximum storage space.
 - [ ] Full frame preview when in landscape mode.
-- [ ] Move time display on screen save a bit
+- [ ] Move time display a bit on screen save pixels on screen
 - [ ] Is it possible to hide or dim top status (battery/et/al)
 - [ ] Implement microphone capture and audio recording.
 - [ ] Check if migration logic for resolvedImageUrl and imageUrl is still needed (see didChangeModel).

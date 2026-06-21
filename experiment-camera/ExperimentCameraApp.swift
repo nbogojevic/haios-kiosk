@@ -25,7 +25,10 @@ struct ExperimentCameraApp: App {
 
             if isUITestSeededContainer {
                 let modelContext = ModelContext(modelContainer)
-                modelContext.insert(Item(timestamp: Date(timeIntervalSince1970: 1_719_000_000)))
+                modelContext.insert(Item(
+                    timestamp: Date(timeIntervalSince1970: 1_719_000_000),
+                    imagePath: uiTestSeedImagePath
+                ))
                 try? modelContext.save()
             }
 
@@ -54,5 +57,24 @@ struct ExperimentCameraApp: App {
             }
         }
         .modelContainer(sharedModelContainer)
+    }
+
+    private static var uiTestSeedImagePath: String? {
+        let capturesDirectory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Captures", isDirectory: true)
+        let imageURL = capturesDirectory.appendingPathComponent("ui-test-seed.png")
+
+        do {
+            try FileManager.default.createDirectory(at: capturesDirectory, withIntermediateDirectories: true)
+
+            if !FileManager.default.fileExists(atPath: imageURL.path),
+               let imageData = Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9WlH0xQAAAAASUVORK5CYII=") {
+                try imageData.write(to: imageURL, options: .atomic)
+            }
+
+            return imageURL.path
+        } catch {
+            return nil
+        }
     }
 }
