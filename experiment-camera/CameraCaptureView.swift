@@ -308,6 +308,7 @@ enum DeviceCameraOrientation: CaseIterable, Sendable {
 @MainActor
 final class CameraCaptureService: ObservableObject {
     private static let imageServerPort: UInt16 = 2112
+    private static let rtspServerPort: UInt16 = 2113
 
     @Published private(set) var authorizationDenied = false
     @Published private(set) var captureCount = 0
@@ -320,6 +321,7 @@ final class CameraCaptureService: ObservableObject {
 
     private let sessionController = CaptureSessionController()
     private let imageServer = ImageHTTPServer(port: imageServerPort)
+    private let rtspServer = RTSPServer(port: rtspServerPort)
     private var onCapture: ((Date, String) -> Void)?
     private var timer: Timer?
     private var currentOrientation = DeviceCameraOrientation.current()
@@ -336,11 +338,15 @@ final class CameraCaptureService: ObservableObject {
             await self?.setCameraRunning(shouldRun) ?? false
         }
         imageServer.start()
+        rtspServer.start()
 
         sessionController.onCapture = { [weak self] result in
             Task { @MainActor in
                 self?.handleCaptureResult(result)
             }
+        }
+        sessionController.onVideoSampleBuffer = { [weak self] sampleBuffer in
+            self?.rtspServer.enqueueSampleBuffer(sampleBuffer)
         }
     }
 
@@ -374,7 +380,7 @@ final class CameraCaptureService: ObservableObject {
 
     var statusMessage: String {
         if authorizationDenied {
-            return "Allow camera access in Settings to capture an image every \(captureIntervalDescription). Latest saved image remains available at at webserver listening on port \(Self.imageServerPort) while the app is running. The service is advertised over Bonjour."
+            return "Allow camera access in Settings to capture an image every \(captureIntervalDescription). Latest saved image remains available at the web server listening on port \(Self.imageServerPort) while the app is running. The service is advertised over Bonjour."
         }
 
         if let errorMessage, !errorMessage.isEmpty {
@@ -621,6 +627,11 @@ private final class CaptureSessionController: @unchecked Sendable {
         set { frameCaptureProcessor.onCapture = newValue }
     }
 
+    var onVideoSampleBuffer: ((CMSampleBuffer) -> Void)? {
+        get { frameCaptureProcessor.onVideoSampleBuffer }
+        set { frameCaptureProcessor.onVideoSampleBuffer = newValue }
+    }
+
     var previewSession: AVCaptureSession {
         session
     }
@@ -759,6 +770,7 @@ private final class VideoFrameCaptureProcessor: NSObject, AVCaptureVideoDataOutp
     private var pendingCapture = false
     private var lastDeliveredFrameTimestamp = CMTime.invalid
     var onCapture: ((Result<(Date, String), Error>) -> Void)?
+    var onVideoSampleBuffer: ((CMSampleBuffer) -> Void)?
 
     func requestCapture() {
         lock.lock()
@@ -773,6 +785,8 @@ private final class VideoFrameCaptureProcessor: NSObject, AVCaptureVideoDataOutp
     }
 
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
+        onVideoSampleBuffer?(sampleBuffer)
+
         guard shouldCaptureFrame(with: sampleBuffer) else {
             return
         }

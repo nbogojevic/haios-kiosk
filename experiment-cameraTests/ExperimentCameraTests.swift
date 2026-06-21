@@ -8,6 +8,7 @@
 import Foundation
 import Testing
 import UIKit
+import Network
 @testable import experiment_camera
 
 struct ExperimentCameraTests {
@@ -198,6 +199,40 @@ struct ExperimentCameraTests {
         #expect(MJPEGStreamState(cameraInfo: liveCameraInfo).cameraStatus == "streaming_live")
         #expect(MJPEGStreamState(cameraInfo: cameraOffInfo) == .cameraOff)
         #expect(MJPEGStreamState(cameraInfo: cameraOffInfo).cameraStatus == "streaming_camera_off")
+    }
+
+    @Test func rtspRequestParsesAbsoluteStreamURLAndCSeq() {
+        let payload = Data(
+            """
+            OPTIONS rtsp://192.168.1.5:2113/stream RTSP/1.0\r
+            CSeq: 7\r
+            User-Agent: VLC\r
+            \r
+            """.utf8
+        )
+
+        let connection = NWConnection(
+            to: .hostPort(host: "127.0.0.1", port: 2113),
+            using: .tcp
+        )
+        let request = RTSPRequest.parse(from: payload, error: nil, connection: connection)
+
+        #expect(request?.method == "OPTIONS")
+        #expect(request?.path == "/stream")
+        #expect(request?.version == "RTSP/1.0")
+        #expect(request?.cSeq == "7")
+        #expect(request?.headers["user-agent"] == "VLC")
+    }
+
+    @Test func rtspSdpDescriptionIncludesCurrentVideoLinesAndStreamURL() {
+        let streamURL = "rtsp://192.168.1.5:2113/stream"
+        let sdp = RTSPServer.sdpDescription(appName: "experiment-camera", streamURL: streamURL)
+
+        #expect(sdp.contains("m=video 0 RTP/AVP 96"))
+        #expect(sdp.contains("a=rtpmap:96 H264/90000"))
+        #expect(sdp.contains("a=fmtp:96 packetization-mode=1"))
+        #expect(sdp.contains("a=control:trackID=0"))
+        #expect(sdp.contains("a=x-stream-url:\(streamURL)"))
     }
 
     @Test func deviceCameraOrientationMapsAllFourMainDeviceOrientations() {
