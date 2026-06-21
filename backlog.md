@@ -1,5 +1,3 @@
-- [ ] Run app in background so that camera capture continues to work even when the app is not in the foreground. This may require additional permissions and handling of background tasks.
-- [ ] Increase size of start/stop camera button.
 - [ ] Check why old images dissappear after restart of app from debugger. Settings however remain.
 - [ ] Implement different logic for preserving images.
 - [ ] Implement microphone capture and audio recording.

@@ -71,8 +71,8 @@
 
 ## Testing expectations
 - There are both unit tests and UI tests:
-  - `experiment-cameraTests/experiment_cameraTests.swift`
-  - `experiment-cameraUITests/experiment_cameraUITests.swift`
+  - in `experiment-cameraTests/`
+  - in `experiment-cameraUITests/`
 - When changing behavior that affects navigation, button labels, screen titles, capture retention, or MJPEG state, update/add tests.
 - Prefer adding focused tests for pure logic and regressions.
 - Avoid adding tests that require real camera hardware unless explicitly requested.
@@ -88,3 +88,4 @@
 ## Important point
 
 If any of the changes diverges from this instructions, especially when user asked notify use and propose update to instructions. 
+When testing in simulator use iPhone SE 2nd generation.
