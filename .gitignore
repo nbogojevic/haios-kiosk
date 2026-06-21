@@ -5,6 +5,7 @@ DerivedData/
 xcuserdata/
 *.xcworkspace/xcuserdata/
 *.xcodeproj/project.xcworkspace/xcuserdata/
+*.xcodeproj/xcuserdata/
 *.moved-aside
 *.hmap
 *.ipa
@@ -55,4 +56,3 @@ Icon?
 *.perspectivev3
 *.xccheckout
 *.xcscmblueprint
-*.xcbkptlist
