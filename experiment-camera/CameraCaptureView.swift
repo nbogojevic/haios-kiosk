@@ -648,7 +648,7 @@ private final class VideoFrameCaptureProcessor: NSObject, AVCaptureVideoDataOutp
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
 
         let sanitizedTimestamp = formatter.string(from: timestamp).replacingOccurrences(of: ":", with: "-")
-        let fileURL = capturesDirectory.appendingPathComponent("front-camera-\(sanitizedTimestamp).jpg")
+        let fileURL = capturesDirectory.appendingPathComponent("kiosk-\(sanitizedTimestamp).jpg")
         try imageData.write(to: fileURL, options: Data.WritingOptions.atomic)
 
         do {

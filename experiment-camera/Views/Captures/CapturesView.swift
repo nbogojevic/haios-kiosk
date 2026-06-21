@@ -377,12 +377,14 @@ private struct ItemDetailView: View {
                 Text(item.timestamp, format: Date.FormatStyle(date: .complete, time: .standard))
                     .font(.headline)
 
-                if let imagePath = item.imagePath {
-                    Text(imagePath)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
-                }
+                Text("Size: \(imageSizeDescription)")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+
+                Text(item.resolvedImageURL?.lastPathComponent ?? "Unavailable")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
             }
             .padding()
         }
@@ -397,6 +399,26 @@ private struct ItemDetailView: View {
         }
 
         return UIImage(contentsOfFile: imageURL.path)
+    }
+
+    private var imageSizeDescription: String {
+        guard let imageURL = item.resolvedImageURL,
+              let attributes = try? FileManager.default.attributesOfItem(atPath: imageURL.path),
+              let fileSize = attributes[.size] as? NSNumber else {
+            return "Unavailable"
+        }
+
+        let bytes = fileSize.int64Value
+
+        if bytes > 1_048_576 {
+            return String(format: "%.2f MB", Double(bytes) / 1_048_576)
+        }
+
+        if bytes > 1_024 {
+            return String(format: "%.2f kB", Double(bytes) / 1_024)
+        }
+
+        return "\(bytes) bytes"
     }
 }
 
