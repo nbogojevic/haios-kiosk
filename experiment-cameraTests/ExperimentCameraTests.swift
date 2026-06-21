@@ -107,4 +107,34 @@ struct ExperimentCameraTests {
         #expect(DeviceCameraOrientation.landscapeRight.videoRotationAngle == 180)
         #expect(DeviceCameraOrientation.portraitUpsideDown.videoRotationAngle == 270)
     }
+
+    @Test func resolvedImageURLSupportsFileURLStrings() throws {
+        let capturesDirectory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Captures", isDirectory: true)
+        try FileManager.default.createDirectory(at: capturesDirectory, withIntermediateDirectories: true)
+
+        let fileURL = capturesDirectory.appendingPathComponent("legacy-file-url-\(UUID().uuidString).jpg")
+        try Data("image".utf8).write(to: fileURL)
+        defer { try? FileManager.default.removeItem(at: fileURL) }
+
+        let item = Item(timestamp: Date(), imagePath: fileURL.absoluteString)
+
+        #expect(item.resolvedImageURL?.path == fileURL.path)
+    }
+
+    @Test func resolvedImageURLFallsBackToCapturesFileNameForStaleSandboxPaths() throws {
+        let capturesDirectory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Captures", isDirectory: true)
+        try FileManager.default.createDirectory(at: capturesDirectory, withIntermediateDirectories: true)
+
+        let fileName = "stale-container-\(UUID().uuidString).jpg"
+        let currentLocation = capturesDirectory.appendingPathComponent(fileName)
+        try Data("image".utf8).write(to: currentLocation)
+        defer { try? FileManager.default.removeItem(at: currentLocation) }
+
+        let stalePath = "/private/var/mobile/Containers/Data/Application/OLD-ID/Documents/Captures/\(fileName)"
+        let item = Item(timestamp: Date(), imagePath: stalePath)
+
+        #expect(item.resolvedImageURL?.path == currentLocation.path)
+    }
 }

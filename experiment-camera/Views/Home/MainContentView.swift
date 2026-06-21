@@ -244,22 +244,42 @@ struct ContentView: View {
     private func insertCapturedItem(timestamp: Date, imagePath: String) {
         modelContext.insert(Item(timestamp: timestamp, imagePath: imagePath))
         pruneStoredCaptures(keepingNewest: maxRetainedImages)
+        try? modelContext.save()
     }
 
     private func pruneStoredCaptures(keepingNewest limit: Int) {
         let retainedItemCount = max(limit, 0)
         let descriptor = FetchDescriptor<Item>(sortBy: [SortDescriptor(\Item.timestamp, order: .reverse)])
 
-        guard let storedItems = try? modelContext.fetch(descriptor), storedItems.count > retainedItemCount else {
+        guard let storedItems = try? modelContext.fetch(descriptor) else {
             return
         }
 
-        for item in storedItems.dropFirst(retainedItemCount) {
-            if let imagePath = item.imagePath {
-                try? FileManager.default.removeItem(atPath: imagePath)
+        var didChangeModel = false
+
+        for (index, item) in storedItems.enumerated() {
+            if let resolvedImageURL = item.resolvedImageURL,
+               item.imagePath != resolvedImageURL.path {
+                item.imagePath = resolvedImageURL.path
+                didChangeModel = true
+            }
+
+            let exceedsRetentionLimit = index >= retainedItemCount
+            let hasMissingImage = item.imagePath != nil && item.resolvedImageURL == nil
+            guard exceedsRetentionLimit || hasMissingImage else {
+                continue
+            }
+
+            if let imageURL = item.resolvedImageURL {
+                try? FileManager.default.removeItem(at: imageURL)
             }
 
             modelContext.delete(item)
+            didChangeModel = true
+        }
+
+        if didChangeModel {
+            try? modelContext.save()
         }
     }
 

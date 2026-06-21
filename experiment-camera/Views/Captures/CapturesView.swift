@@ -138,13 +138,13 @@ struct CapturesView: View {
     }
 
     private var latestAvailableImageURL: URL? {
-        items.compactMap(\.imageURL).first
+        items.compactMap(\.resolvedImageURL).first
     }
 
     private var selectedShareableImageURLs: [URL] {
         items
             .filter { selectedItemIDs.contains($0.persistentModelID) }
-            .compactMap(\.imageURL)
+            .compactMap(\.resolvedImageURL)
     }
 
     private var shareableImageURLs: [URL] {
@@ -216,12 +216,14 @@ struct CapturesView: View {
                     selectedItem = nil
                 }
 
-                if let imagePath = item.imagePath {
-                    try? FileManager.default.removeItem(atPath: imagePath)
+                if let imageURL = item.resolvedImageURL {
+                    try? FileManager.default.removeItem(at: imageURL)
                 }
 
                 modelContext.delete(item)
             }
+
+            try? modelContext.save()
         }
     }
 
@@ -232,9 +234,9 @@ struct CapturesView: View {
             isSelectingItems = false
 
             for item in items {
-                if let imagePath = item.imagePath,
-                   URL(fileURLWithPath: imagePath).deletingLastPathComponent() != capturesDirectoryURL {
-                    try? FileManager.default.removeItem(atPath: imagePath)
+                if let imageURL = item.resolvedImageURL,
+                   imageURL.deletingLastPathComponent() != capturesDirectoryURL {
+                    try? FileManager.default.removeItem(at: imageURL)
                 }
 
                 modelContext.delete(item)
@@ -243,6 +245,8 @@ struct CapturesView: View {
             if FileManager.default.fileExists(atPath: capturesDirectoryURL.path) {
                 try? FileManager.default.removeItem(at: capturesDirectoryURL)
             }
+
+            try? modelContext.save()
         }
     }
 }
@@ -260,12 +264,12 @@ private struct CaptureRowContentView: View {
                     .foregroundStyle(isSelected ? AnyShapeStyle(.tint) : AnyShapeStyle(.tertiary))
             }
 
-            CaptureThumbnailView(imagePath: item.imagePath)
+            CaptureThumbnailView(imagePath: item.resolvedImageURL?.path)
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(item.timestamp, format: Date.FormatStyle(date: .numeric, time: .standard))
 
-                if item.imageURL != nil {
+                if item.resolvedImageURL != nil {
                     Label("Captured image", systemImage: "photo")
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -388,7 +392,7 @@ private struct ItemDetailView: View {
     }
 
     private var image: UIImage? {
-        guard let imageURL = item.imageURL else {
+        guard let imageURL = item.resolvedImageURL else {
             return nil
         }
 
@@ -422,19 +426,4 @@ private struct ActivityViewController: UIViewControllerRepresentable {
     }
 
     func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
-}
-
-private extension Item {
-    var imageURL: URL? {
-        guard let imagePath, !imagePath.isEmpty else {
-            return nil
-        }
-
-        let imageURL = URL(fileURLWithPath: imagePath)
-        guard FileManager.default.fileExists(atPath: imageURL.path) else {
-            return nil
-        }
-
-        return imageURL
-    }
 }
