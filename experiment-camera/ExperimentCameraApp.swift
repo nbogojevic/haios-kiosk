@@ -11,6 +11,7 @@ import SwiftData
 @main
 struct ExperimentCameraApp: App {
     private static let uiTestSeedCaptureItemArgument = "-uiTestSeedCaptureItem"
+    @State private var showSplashScreen = true
 
     var sharedModelContainer: ModelContainer = {
         let schema = Schema([
@@ -36,7 +37,21 @@ struct ExperimentCameraApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            ZStack {
+                if showSplashScreen {
+                    SplashScreenView()
+                        .transition(.opacity)
+                } else {
+                    ContentView()
+                }
+            }
+            .onAppear {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                    withAnimation(.easeOut(duration: 0.3)) {
+                        showSplashScreen = false
+                    }
+                }
+            }
         }
         .modelContainer(sharedModelContainer)
     }
