@@ -13,7 +13,7 @@ import UIKit
 
 enum CaptureRetentionPolicy {
     static let storageKey = "maxRetainedImages"
-    static let defaultMaxRetainedImages = 10
+    static let defaultMaxRetainedImages = 300
 
     static var maxRetainedImages: Int {
         let storedValue = UserDefaults.standard.object(forKey: storageKey) as? Int
@@ -242,7 +242,7 @@ final class CameraCaptureService: ObservableObject {
         captureInterval = updatedInterval
 
         if isRunning {
-            scheduleTimedCaptures(capturingImmediately: false)
+            scheduleTimedCaptures()
         }
     }
 
@@ -309,7 +309,7 @@ final class CameraCaptureService: ObservableObject {
             }
 
             hasCapturedImageSinceSessionStart = false
-            scheduleTimedCaptures(capturingImmediately: true)
+            scheduleTimedCaptures()
         } catch {
             errorMessage = error.localizedDescription
             await stopSession()
@@ -326,7 +326,7 @@ final class CameraCaptureService: ObservableObject {
         _ = await sessionController.stop()
     }
 
-    private func scheduleTimedCaptures(capturingImmediately: Bool) {
+    private func scheduleTimedCaptures() {
         timer?.invalidate()
 
         timer = Timer.scheduledTimer(withTimeInterval: captureInterval, repeats: true) { [weak self] _ in
@@ -337,10 +337,6 @@ final class CameraCaptureService: ObservableObject {
             Task { @MainActor in
                 self.requestFrameCapture()
             }
-        }
-
-        if capturingImmediately {
-            timer?.fireDate = Date().addingTimeInterval(captureInterval)
         }
     }
 
