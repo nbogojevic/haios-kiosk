@@ -724,6 +724,7 @@ final class ImageHTTPServer {
 }
 
 final class RTSPServer {
+    nonisolated static let serviceType = "_rtsp._tcp"
     nonisolated static let streamPath = "/stream"
     nonisolated static let supportedMethods = "OPTIONS, DESCRIBE, SETUP, PLAY, PAUSE, TEARDOWN"
 
@@ -757,6 +758,11 @@ final class RTSPServer {
             parameters.allowLocalEndpointReuse = true
 
             let listener = try NWListener(using: parameters, on: port)
+            listener.service = NWListener.Service(
+                name: bonjourServiceName(),
+                type: Self.serviceType,
+                txtRecord: bonjourTXTRecord()
+            )
             listener.stateUpdateHandler = { [weak self] state in
                 guard let self else {
                     return
@@ -1077,6 +1083,19 @@ final class RTSPServer {
                 keepConnectionOpen: false
             )
         }
+    }
+
+    private func bonjourServiceName() -> String {
+        let deviceName = UIDevice.current.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        return "\(appName()) on \(deviceName)"
+    }
+
+    private func bonjourTXTRecord() -> Data {
+        NetService.data(fromTXTRecord: [
+            "path": Data(Self.streamPath.utf8),
+            "format": Data("rtsp".utf8),
+            "transport": Data("RTP/AVP/TCP".utf8)
+        ])
     }
 
     nonisolated private func appName() -> String {

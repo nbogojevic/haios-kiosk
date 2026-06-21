@@ -23,6 +23,7 @@
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_latestimg._tcp</string>
+		<string>_rtsp._tcp</string>
 	</array>
 	<key>NSCameraUsageDescription</key>
 	<string>The app uses the front camera to capture an image every 10 seconds.</string>
