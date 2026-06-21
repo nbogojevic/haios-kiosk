@@ -149,7 +149,7 @@ final class CameraCaptureService: ObservableObject {
     @Published private(set) var errorMessage: String?
 
     private let sessionController = CaptureSessionController()
-    private let latestImageServer = ImageHTTPServer(port: imageServerPort)
+    private let imageServer = ImageHTTPServer(port: imageServerPort)
     private var onCapture: ((Date, String) -> Void)?
     private var timer: Timer?
     private var currentOrientation = DeviceCameraOrientation.current()
@@ -159,13 +159,13 @@ final class CameraCaptureService: ObservableObject {
         UIDevice.current.isBatteryMonitoringEnabled = true
         currentOrientation = DeviceCameraOrientation.current(fallback: currentOrientation)
 
-        latestImageServer.infoProvider = { [weak self] in
+        imageServer.infoProvider = { [weak self] in
             self?.infoSnapshot() ?? .unavailable
         }
-        latestImageServer.cameraControlHandler = { [weak self] shouldRun in
+        imageServer.cameraControlHandler = { [weak self] shouldRun in
             await self?.setCameraRunning(shouldRun) ?? false
         }
-        latestImageServer.start()
+        imageServer.start()
 
         sessionController.onCapture = { [weak self] result in
             Task { @MainActor in
