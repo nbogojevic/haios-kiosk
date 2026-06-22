@@ -24,7 +24,6 @@ struct DeviceInfoSnapshot: Encodable {
             let mode: String
             let maxRetainedImages: Int
             let maxRetainedImageStorageMB: Int
-            let helperText: String
         }
 
         let isFilming: Bool

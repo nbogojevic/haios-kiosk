@@ -606,7 +606,6 @@ final class CameraCaptureService: ObservableObject {
                     mode: CaptureRetentionPolicy.mode.rawValue,
                     maxRetainedImages: CaptureRetentionPolicy.maxRetainedImages,
                     maxRetainedImageStorageMB: CaptureRetentionPolicy.maxRetainedImageStorageMB,
-                    helperText: CaptureRetentionPolicy.helperText()
                 )
             )
         )
