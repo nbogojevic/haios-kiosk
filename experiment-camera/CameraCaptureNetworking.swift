@@ -475,34 +475,6 @@ final class ImageHTTPServer {
             return Self.errorResponse(status: "500 Internal Server Error", message: "The latest image could not be loaded.", omitBody: omitBody)
         }
     }
-    
-    // Inside ImageHTTPServer (near other private helpers)
-    private static let maxConsecutivePlaceholderFrames = 2
-
-    private func shouldSendMJPEGFrame(
-        identity: MJPEGFrameIdentity,
-        lastIdentity: MJPEGFrameIdentity?,
-        consecutiveSentForCurrentIdentity: Int
-    ) -> Bool {
-        // Always send first frame on a new stream.
-        guard let lastIdentity else {
-            return true
-        }
-
-        // Always send when identity changes (placeholder<->placeholder included).
-        guard identity == lastIdentity else {
-            return true
-        }
-
-        // For same identity:
-        // - placeholders: cap consecutive sends
-        // - live frames: never resend unchanged frame identity
-        if identity.isPlaceholder {
-            return consecutiveSentForCurrentIdentity < Self.maxConsecutivePlaceholderFrames
-        }
-
-        return false
-    }
 
     private func streamMJPEG(on connection: NWConnection, omitBody: Bool) async {
         let boundary = "Boundary-\(UUID().uuidString)"
