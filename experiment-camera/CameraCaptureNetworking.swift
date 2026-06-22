@@ -475,6 +475,34 @@ final class ImageHTTPServer {
             return Self.errorResponse(status: "500 Internal Server Error", message: "The latest image could not be loaded.", omitBody: omitBody)
         }
     }
+    
+    // Inside ImageHTTPServer (near other private helpers)
+    private static let maxConsecutivePlaceholderFrames = 2
+
+    private func shouldSendMJPEGFrame(
+        identity: MJPEGFrameIdentity,
+        lastIdentity: MJPEGFrameIdentity?,
+        consecutiveSentForCurrentIdentity: Int
+    ) -> Bool {
+        // Always send first frame on a new stream.
+        guard let lastIdentity else {
+            return true
+        }
+
+        // Always send when identity changes (placeholder<->placeholder included).
+        guard identity == lastIdentity else {
+            return true
+        }
+
+        // For same identity:
+        // - placeholders: cap consecutive sends
+        // - live frames: never resend unchanged frame identity
+        if identity.isPlaceholder {
+            return consecutiveSentForCurrentIdentity < Self.maxConsecutivePlaceholderFrames
+        }
+
+        return false
+    }
 
     private func streamMJPEG(on connection: NWConnection, omitBody: Bool) async {
         let boundary = "Boundary-\(UUID().uuidString)"
@@ -501,6 +529,7 @@ final class ImageHTTPServer {
         let waitingForFirstImagePlaceholder = Self.placeholderImageJPEGData(style: .waitingForFirstImage)
         let cameraOffPlaceholder = Self.placeholderImageJPEGData(style: .cameraOff)
         var lastFrameIdentity: MJPEGFrameIdentity?
+        var numberOfSameFramesSent = 0
 
         incrementActiveMJPEGStreamCount()
         defer { decrementActiveMJPEGStreamCount() }
@@ -511,13 +540,24 @@ final class ImageHTTPServer {
                 waitingForFirstImagePlaceholder: waitingForFirstImagePlaceholder,
                 cameraOffPlaceholder: cameraOffPlaceholder
             )
-
+            
+            
             switch update {
             case let .frame(identity, imageData):
-                let part = Self.mjpegFrame(boundary: boundary, imageData: imageData)
-                guard await send(part, on: connection) == nil else {
-                    connection.cancel()
-                    return
+                if lastFrameIdentity == nil ||
+                    (identity == .placeholder(.waitingForFirstImage) && (lastFrameIdentity != .placeholder(.waitingForFirstImage) || numberOfSameFramesSent < 1)) ||
+                    (identity == .placeholder(.cameraOff) && (lastFrameIdentity != .placeholder(.cameraOff) || numberOfSameFramesSent < 1)) ||
+                    (identity != .placeholder(.cameraOff) && identity != .placeholder(.waitingForFirstImage)) {
+                    if (identity == lastFrameIdentity) {
+                        numberOfSameFramesSent += 1
+                    } else {
+                        numberOfSameFramesSent = 0
+                    }
+                    let part = Self.mjpegFrame(boundary: boundary, imageData: imageData)
+                    guard await send(part, on: connection) == nil else {
+                        connection.cancel()
+                        return
+                    }
                 }
 
                 lastFrameIdentity = identity
