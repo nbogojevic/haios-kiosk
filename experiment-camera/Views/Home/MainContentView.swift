@@ -124,6 +124,11 @@ struct ContentView: View {
             isScreenDimmed = false
             screenSaverActivatedAt = nil
             updateIdleTimerState()
+            cameraService.setCaptureHandler { timestamp, imagePath in
+                withAnimation {
+                    insertCapturedItem(timestamp: timestamp, imagePath: imagePath)
+                }
+            }
 
             if !didConfigureInitialState {
                 didConfigureInitialState = true
@@ -131,11 +136,6 @@ struct ContentView: View {
                 browserSession.loadInitialPageIfNeeded()
                 cameraService.setCaptureInterval(seconds: captureIntervalSeconds)
                 pruneStoredCaptures()
-                cameraService.setCaptureHandler { timestamp, imagePath in
-                    withAnimation {
-                        insertCapturedItem(timestamp: timestamp, imagePath: imagePath)
-                    }
-                }
 
                 if startCameraOnLaunch {
                     Task {
@@ -259,8 +259,8 @@ struct ContentView: View {
 
     private func insertCapturedItem(timestamp: Date, imagePath: String) {
         modelContext.insert(Item(timestamp: timestamp, imagePath: imagePath))
-        pruneStoredCaptures()
         try? modelContext.save()
+        pruneStoredCaptures()
     }
 
     private func pruneStoredCaptures() {
@@ -272,25 +272,31 @@ struct ContentView: View {
 
         pruneTask = Task(priority: .utility) {
             _ = try? CaptureRetentionPolicy.pruneCapturedImages(in: capturesDirectory, keepingNewest: retainedImageCount)
-            let existingImagePaths = Self.capturedImagePaths(in: capturesDirectory)
+            let existingImageTimestamps = Self.capturedImageTimestamps(in: capturesDirectory)
 
             guard !Task.isCancelled else {
                 return
             }
 
             await MainActor.run {
-                applyStoredCapturePruning(existingImagePaths: existingImagePaths, capturesDirectory: capturesDirectory)
+                guard !Task.isCancelled else {
+                    return
+                }
+
+                applyStoredCapturePruning(existingImageTimestamps: existingImageTimestamps, capturesDirectory: capturesDirectory)
             }
         }
     }
 
-    private func applyStoredCapturePruning(existingImagePaths: Set<String>, capturesDirectory: URL) {
+    private func applyStoredCapturePruning(existingImageTimestamps: [String: Date], capturesDirectory: URL) {
         let descriptor = FetchDescriptor<Item>(sortBy: [SortDescriptor(\Item.timestamp, order: .reverse)])
 
         guard let storedItems = try? modelContext.fetch(descriptor) else {
             return
         }
 
+        let existingImagePaths = Set(existingImageTimestamps.keys)
+        var representedImagePaths = Set<String>()
         var didChangeModel = false
 
         for item in storedItems {
@@ -306,11 +312,20 @@ struct ContentView: View {
                 didChangeModel = true
             }
 
-            guard hadStoredPath, resolvedPath == nil else {
+            if hadStoredPath, resolvedPath == nil {
+                modelContext.delete(item)
+                didChangeModel = true
                 continue
             }
 
-            modelContext.delete(item)
+            if let resolvedPath {
+                representedImagePaths.insert(resolvedPath)
+            }
+        }
+
+        for (imagePath, timestamp) in existingImageTimestamps where !representedImagePaths.contains(imagePath) {
+            modelContext.insert(Item(timestamp: timestamp, imagePath: imagePath))
+            representedImagePaths.insert(imagePath)
             didChangeModel = true
         }
 
@@ -319,20 +334,30 @@ struct ContentView: View {
         }
     }
 
-    private static func capturedImagePaths(in capturesDirectory: URL) -> Set<String> {
+    private static func capturedImageTimestamps(in capturesDirectory: URL) -> [String: Date] {
+        let resourceKeys: Set<URLResourceKey> = [
+            .contentModificationDateKey,
+            .creationDateKey,
+            .isRegularFileKey
+        ]
+
         guard let urls = try? FileManager.default.contentsOfDirectory(
             at: capturesDirectory,
-            includingPropertiesForKeys: nil,
+            includingPropertiesForKeys: Array(resourceKeys),
             options: [.skipsHiddenFiles]
         ) else {
-            return []
+            return [:]
         }
 
-        return Set(
-            urls
-                .filter { ["jpg", "jpeg"].contains($0.pathExtension.lowercased()) }
-                .map(\.path)
-        )
+        return urls.reduce(into: [:]) { imageTimestamps, fileURL in
+            guard ["jpg", "jpeg"].contains(fileURL.pathExtension.lowercased()),
+                  let resourceValues = try? fileURL.resourceValues(forKeys: resourceKeys),
+                  resourceValues.isRegularFile == true else {
+                return
+            }
+
+            imageTimestamps[fileURL.path] = resourceValues.contentModificationDate ?? resourceValues.creationDate ?? .distantPast
+        }
     }
 
     private func resolvedImagePath(
@@ -349,8 +374,16 @@ struct ContentView: View {
                 return fileURL.path
             }
 
+            if FileManager.default.fileExists(atPath: fileURL.path) {
+                return fileURL.path
+            }
+
             let fallbackPath = capturesDirectory.appendingPathComponent(fileURL.lastPathComponent).path
-            return existingImagePaths.contains(fallbackPath) ? fallbackPath : nil
+            if existingImagePaths.contains(fallbackPath) || FileManager.default.fileExists(atPath: fallbackPath) {
+                return fallbackPath
+            }
+
+            return nil
         }
 
         let pathURL = URL(fileURLWithPath: storedPath)
@@ -358,8 +391,16 @@ struct ContentView: View {
             return pathURL.path
         }
 
+        if FileManager.default.fileExists(atPath: pathURL.path) {
+            return pathURL.path
+        }
+
         let fallbackPath = capturesDirectory.appendingPathComponent(pathURL.lastPathComponent).path
-        return existingImagePaths.contains(fallbackPath) ? fallbackPath : nil
+        if existingImagePaths.contains(fallbackPath) || FileManager.default.fileExists(atPath: fallbackPath) {
+            return fallbackPath
+        }
+
+        return nil
     }
 
     private func showDestination(_ destination: AppDestination) {
