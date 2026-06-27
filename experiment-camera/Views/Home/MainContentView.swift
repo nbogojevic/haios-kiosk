@@ -23,6 +23,8 @@ struct ContentView: View {
     @AppStorage(CaptureRetentionPolicy.maxStorageMBStorageKey) private var maxRetainedImageStorageMB = CaptureRetentionPolicy.defaultMaxRetainedImageStorageMB
     @AppStorage("startCameraOnLaunch") private var startCameraOnLaunch = false
     @AppStorage(BrowserSession.startupURLStorageKey) private var startupURLString = BrowserSession.defaultStartupURLString
+    @AppStorage(HTTPServerAuthentication.usernameStorageKey) private var httpServerUsername = HTTPServerAuthentication.defaultUsername
+    @AppStorage(HTTPServerAuthentication.passwordStorageKey) private var httpServerPassword = HTTPServerAuthentication.defaultPassword
 
     @Environment(\.modelContext) private var modelContext
     @Environment(\.scenePhase) private var scenePhase
@@ -194,6 +196,8 @@ struct ContentView: View {
                 maxRetainedImageStorageMB: $maxRetainedImageStorageMB,
                 startCameraOnLaunch: $startCameraOnLaunch,
                 startupURLString: $startupURLString,
+                httpServerUsername: $httpServerUsername,
+                httpServerPassword: $httpServerPassword,
                 screenSaverSeconds: $screenSaverSeconds,
                 screenDimDelaySeconds: $screenDimDelaySeconds,
                 screenDimBrightnessPercent: $screenDimBrightnessPercent,

@@ -137,6 +137,89 @@ enum MJPEGStreamState: Equatable {
     }
 }
 
+struct HTTPServerAuthentication {
+    static let usernameStorageKey = "httpServerUsername"
+    static let passwordStorageKey = "httpServerPassword"
+    static let defaultUsername = "kamera"
+    static let defaultPassword = "lozinka"
+
+    let username: String
+    let password: String
+    let isEnabled: Bool
+
+    static func currentCredentials(userDefaults: UserDefaults = .standard) -> HTTPServerAuthentication {
+        let storedUsername = userDefaults.string(forKey: usernameStorageKey)
+        let storedPassword = userDefaults.string(forKey: passwordStorageKey)
+
+        if isBlank(storedUsername), isBlank(storedPassword) {
+            return HTTPServerAuthentication(username: "", password: "", isEnabled: false)
+        }
+
+        return HTTPServerAuthentication(
+            username: sanitizedCredential(
+                storedUsername,
+                defaultValue: defaultUsername
+            ),
+            password: sanitizedCredential(
+                storedPassword,
+                defaultValue: defaultPassword
+            ),
+            isEnabled: true
+        )
+    }
+
+    func authorizes(headerValue: String?) -> Bool {
+        guard isEnabled else {
+            return true
+        }
+
+        guard let headerValue else {
+            return false
+        }
+
+        let parts = headerValue.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: true)
+        guard parts.count == 2,
+              parts[0].lowercased() == "basic",
+              let decodedData = Data(base64Encoded: String(parts[1])),
+              let decodedValue = String(data: decodedData, encoding: .utf8),
+              let separatorIndex = decodedValue.firstIndex(of: ":") else {
+            return false
+        }
+
+        let providedUsername = String(decodedValue[..<separatorIndex])
+        let providedPassword = String(decodedValue[decodedValue.index(after: separatorIndex)...])
+        return secureCompare(providedUsername, username) && secureCompare(providedPassword, password)
+    }
+
+    private static func isBlank(_ value: String?) -> Bool {
+        value?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == true
+    }
+
+    private static func sanitizedCredential(_ value: String?, defaultValue: String) -> String {
+        guard let value else {
+            return defaultValue
+        }
+
+        let trimmedValue = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmedValue.isEmpty ? defaultValue : trimmedValue
+    }
+
+    private func secureCompare(_ lhs: String, _ rhs: String) -> Bool {
+        let lhsBytes = Array(lhs.utf8)
+        let rhsBytes = Array(rhs.utf8)
+        var difference = lhsBytes.count ^ rhsBytes.count
+        let maxCount = max(lhsBytes.count, rhsBytes.count)
+
+        for index in 0..<maxCount {
+            let lhsByte = index < lhsBytes.count ? lhsBytes[index] : 0
+            let rhsByte = index < rhsBytes.count ? rhsBytes[index] : 0
+            difference |= Int(lhsByte ^ rhsByte)
+        }
+
+        return difference == 0
+    }
+}
+
 extension UIDevice.BatteryState {
     var description: String {
         switch self {
@@ -170,6 +253,9 @@ final class ImageHTTPServer {
     private var activeMJPEGStreamCount = 0
     var infoProvider: (() async -> DeviceInfoSnapshot)?
     var cameraControlHandler: ((Bool) async -> Bool)?
+    var authenticationProvider: () -> HTTPServerAuthentication = {
+        HTTPServerAuthentication.currentCredentials()
+    }
 
     init(port: UInt16) {
         self.port = NWEndpoint.Port(rawValue: port) ?? .init(integerLiteral: 2112)
@@ -332,6 +418,14 @@ final class ImageHTTPServer {
     }
 
     private func handleRequest(_ request: HTTPRequest, on connection: NWConnection) async {
+        guard isAuthorized(request) else {
+            let response = Self.unauthorizedResponse(omitBody: request.omitBody)
+            connection.send(content: response, completion: .contentProcessed { _ in
+                connection.cancel()
+            })
+            return
+        }
+
         if request.path == Self.cameraPath {
             let response = await cameraResponse(for: request)
             connection.send(content: response, completion: .contentProcessed { _ in
@@ -412,6 +506,18 @@ final class ImageHTTPServer {
                 contentLength: body.count
             )
         }
+    }
+
+    private func isAuthorized(_ request: HTTPRequest) -> Bool {
+        guard Self.requiresAuthentication(path: request.path) else {
+            return true
+        }
+
+        return authenticationProvider().authorizes(headerValue: request.headers["authorization"])
+    }
+
+    nonisolated private static func requiresAuthentication(path: String) -> Bool {
+        path == infoPath || path == latestImagePath || path == mjpegPath || path == cameraPath
     }
 
     private func currentCameraIsOn() async -> Bool {
@@ -643,6 +749,7 @@ final class ImageHTTPServer {
             .map(String.init)
             ?? rawPath
 
+        var headers: [String: String] = [:]
         var contentLength = 0
         for line in lines.dropFirst() {
             let headerParts = line.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)
@@ -651,17 +758,16 @@ final class ImageHTTPServer {
             }
 
             let name = String(headerParts[0]).trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            guard name == "content-length" else {
-                continue
-            }
-
             let rawValue = String(headerParts[1]).trimmingCharacters(in: .whitespacesAndNewlines)
-            guard let parsedLength = Int(rawValue), parsedLength >= 0 else {
-                return .invalid
-            }
+            headers[name] = rawValue
 
-            contentLength = parsedLength
-            break
+            if name == "content-length" {
+                guard let parsedLength = Int(rawValue), parsedLength >= 0 else {
+                    return .invalid
+                }
+
+                contentLength = parsedLength
+            }
         }
 
         let bodyStartIndex = headerDelimiterRange.upperBound
@@ -681,6 +787,7 @@ final class ImageHTTPServer {
             HTTPRequest(
                 method: method,
                 path: path,
+                headers: headers,
                 body: body,
                 omitBody: method == "HEAD"
             )
@@ -776,6 +883,21 @@ final class ImageHTTPServer {
         return response(
             status: status,
             headers: ["Content-Type": "text/plain; charset=utf-8"],
+            body: body,
+            omitBody: omitBody,
+            contentLength: body.count
+        )
+    }
+
+    nonisolated private static func unauthorizedResponse(omitBody: Bool) -> Data {
+        let body = Data("Authentication is required.".utf8)
+        return response(
+            status: "401 Unauthorized",
+            headers: [
+                "Cache-Control": "no-store",
+                "Content-Type": "text/plain; charset=utf-8",
+                "WWW-Authenticate": "Basic realm=\"experiment-camera\", charset=\"UTF-8\""
+            ],
             body: body,
             omitBody: omitBody,
             contentLength: body.count
@@ -1787,6 +1909,7 @@ private final class H264VideoEncoder {
 private struct HTTPRequest {
     let method: String
     let path: String
+    let headers: [String: String]
     let body: Data
     let omitBody: Bool
 

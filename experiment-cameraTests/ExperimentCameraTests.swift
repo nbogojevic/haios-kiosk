@@ -12,6 +12,58 @@ import Network
 @testable import experiment_camera
 
 struct ExperimentCameraTests {
+    @Test func httpServerAuthenticationUsesDefaultCredentials() {
+        let credentials = HTTPServerAuthentication.currentCredentials(userDefaults: temporaryUserDefaults())
+
+        #expect(credentials.isEnabled)
+        #expect(credentials.authorizes(headerValue: basicAuthorizationHeader(username: "kamera", password: "lozinka")))
+        #expect(!credentials.authorizes(headerValue: basicAuthorizationHeader(username: "kamera", password: "wrong")))
+        #expect(!credentials.authorizes(headerValue: nil))
+    }
+
+    @Test func httpServerAuthenticationUsesConfiguredCredentials() {
+        let defaults = temporaryUserDefaults()
+        defaults.set("custom-user", forKey: HTTPServerAuthentication.usernameStorageKey)
+        defaults.set("custom-password", forKey: HTTPServerAuthentication.passwordStorageKey)
+
+        let credentials = HTTPServerAuthentication.currentCredentials(userDefaults: defaults)
+
+        #expect(credentials.isEnabled)
+        #expect(credentials.authorizes(headerValue: basicAuthorizationHeader(username: "custom-user", password: "custom-password")))
+        #expect(!credentials.authorizes(headerValue: basicAuthorizationHeader(username: "kamera", password: "lozinka")))
+    }
+
+    @Test func httpServerAuthenticationDisablesWhenConfiguredCredentialsAreEmpty() {
+        let defaults = temporaryUserDefaults()
+        defaults.set("  ", forKey: HTTPServerAuthentication.usernameStorageKey)
+        defaults.set("\n", forKey: HTTPServerAuthentication.passwordStorageKey)
+
+        let credentials = HTTPServerAuthentication.currentCredentials(userDefaults: defaults)
+
+        #expect(!credentials.isEnabled)
+        #expect(credentials.authorizes(headerValue: nil))
+        #expect(credentials.authorizes(headerValue: basicAuthorizationHeader(username: "kamera", password: "lozinka")))
+    }
+
+    @Test func httpServerAuthenticationKeepsDefaultsForPartiallyEmptyConfiguredCredentials() {
+        let defaults = temporaryUserDefaults()
+        defaults.set("", forKey: HTTPServerAuthentication.usernameStorageKey)
+        defaults.set("custom-password", forKey: HTTPServerAuthentication.passwordStorageKey)
+
+        let credentials = HTTPServerAuthentication.currentCredentials(userDefaults: defaults)
+
+        #expect(credentials.isEnabled)
+        #expect(credentials.authorizes(headerValue: basicAuthorizationHeader(username: "kamera", password: "custom-password")))
+    }
+
+    @Test func httpServerAuthenticationRejectsMalformedAuthorizationHeaders() {
+        let credentials = HTTPServerAuthentication.currentCredentials(userDefaults: temporaryUserDefaults())
+
+        #expect(!credentials.authorizes(headerValue: "Bearer token"))
+        #expect(!credentials.authorizes(headerValue: "Basic not-base64"))
+        #expect(!credentials.authorizes(headerValue: "Basic \(Data("missing-colon".utf8).base64EncodedString())"))
+    }
+
     @Test func pruneCapturedImagesKeepsNewestTenJPEGs() throws {
         let defaults = UserDefaults.standard
         let previousMode = defaults.string(forKey: CaptureRetentionPolicy.modeStorageKey)
@@ -292,5 +344,17 @@ struct ExperimentCameraTests {
         #expect(BrowserSession.normalizedURL(from: "javascript:alert(1)") == nil)
         #expect(BrowserSession.normalizedURL(from: "ftp://example.com") == nil)
         #expect(BrowserSession.normalizedURL(from: "data:text/html,hello") == nil)
+    }
+
+    private func temporaryUserDefaults() -> UserDefaults {
+        let suiteName = "ExperimentCameraTests-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+        return defaults
+    }
+
+    private func basicAuthorizationHeader(username: String, password: String) -> String {
+        let value = Data("\(username):\(password)".utf8).base64EncodedString()
+        return "Basic \(value)"
     }
 }

@@ -7,6 +7,8 @@ struct SettingsView: View {
     @Binding var maxRetainedImageStorageMB: Int
     @Binding var startCameraOnLaunch: Bool
     @Binding var startupURLString: String
+    @Binding var httpServerUsername: String
+    @Binding var httpServerPassword: String
     @Binding var screenSaverSeconds: Int
     @Binding var screenDimDelaySeconds: Int
     @Binding var screenDimBrightnessPercent: Int
@@ -34,6 +36,20 @@ struct SettingsView: View {
                     Text("Launch")
                 } footer: {
                     Text("When enabled, the camera automatically starts when the app launches and resumes again after returning to the foreground.")
+                }
+
+                Section {
+                    TextField("Username", text: $httpServerUsername)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+
+                    SecureField("Password", text: $httpServerPassword)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                } header: {
+                    Text("Local HTTP Server")
+                } footer: {
+                    Text("Clients must use HTTP Basic authentication. Clear both fields to disable authentication.")
                 }
 
                 Section {
