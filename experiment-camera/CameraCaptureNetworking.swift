@@ -168,7 +168,7 @@ struct HTTPServerAuthentication {
         )
     }
 
-    func authorizes(headerValue: String?) -> Bool {
+    nonisolated func authorizes(headerValue: String?) -> Bool {
         guard isEnabled else {
             return true
         }
@@ -204,7 +204,7 @@ struct HTTPServerAuthentication {
         return trimmedValue.isEmpty ? defaultValue : trimmedValue
     }
 
-    private func secureCompare(_ lhs: String, _ rhs: String) -> Bool {
+    nonisolated private func secureCompare(_ lhs: String, _ rhs: String) -> Bool {
         let lhsBytes = Array(lhs.utf8)
         let rhsBytes = Array(rhs.utf8)
         var difference = lhsBytes.count ^ rhsBytes.count
@@ -253,7 +253,7 @@ final class ImageHTTPServer {
     private var activeMJPEGStreamCount = 0
     var infoProvider: (() async -> DeviceInfoSnapshot)?
     var cameraControlHandler: ((Bool) async -> Bool)?
-    var authenticationProvider: () -> HTTPServerAuthentication = {
+    nonisolated(unsafe) var authenticationProvider: () -> HTTPServerAuthentication = {
         HTTPServerAuthentication.currentCredentials()
     }
 
@@ -953,7 +953,7 @@ final class RTSPServer {
             self?.sendEncodedAccessUnit(accessUnit)
         }
     }
-    var authenticationProvider: () -> HTTPServerAuthentication = {
+    nonisolated(unsafe) var authenticationProvider: () -> HTTPServerAuthentication = {
         HTTPServerAuthentication.currentCredentials()
     }
 
@@ -1307,11 +1307,11 @@ final class RTSPServer {
         return "\(appName()) on \(deviceName)"
     }
 
-    private func isAuthorized(_ request: RTSPRequest) -> Bool {
+    nonisolated private func isAuthorized(_ request: RTSPRequest) -> Bool {
         authenticationProvider().authorizes(headerValue: request.headers["authorization"])
     }
 
-    private func unauthorizedResponse(cSeq: String?) -> RTSPResponse {
+    nonisolated private func unauthorizedResponse(cSeq: String?) -> RTSPResponse {
         let body = Data("Authentication is required.".utf8)
         return RTSPResponse(
             data: Self.messageResponse(
