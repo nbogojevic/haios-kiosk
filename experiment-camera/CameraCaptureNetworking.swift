@@ -953,6 +953,9 @@ final class RTSPServer {
             self?.sendEncodedAccessUnit(accessUnit)
         }
     }
+    var authenticationProvider: () -> HTTPServerAuthentication = {
+        HTTPServerAuthentication.currentCredentials()
+    }
 
     init(port: UInt16) {
         self.port = NWEndpoint.Port(rawValue: port) ?? .init(integerLiteral: 2113)
@@ -1091,6 +1094,10 @@ final class RTSPServer {
                 ),
                 keepConnectionOpen: false
             )
+        }
+
+        guard isAuthorized(request) else {
+            return unauthorizedResponse(cSeq: request.cSeq)
         }
 
         switch request.method {
@@ -1298,6 +1305,27 @@ final class RTSPServer {
     private func bonjourServiceName() -> String {
         let deviceName = UIDevice.current.name.trimmingCharacters(in: .whitespacesAndNewlines)
         return "\(appName()) on \(deviceName)"
+    }
+
+    private func isAuthorized(_ request: RTSPRequest) -> Bool {
+        authenticationProvider().authorizes(headerValue: request.headers["authorization"])
+    }
+
+    private func unauthorizedResponse(cSeq: String?) -> RTSPResponse {
+        let body = Data("Authentication is required.".utf8)
+        return RTSPResponse(
+            data: Self.messageResponse(
+                status: "401 Unauthorized",
+                cSeq: cSeq,
+                headers: [
+                    "Server": appName(),
+                    "WWW-Authenticate": "Basic realm=\"experiment-camera\", charset=\"UTF-8\""
+                ],
+                body: body,
+                contentType: "text/plain; charset=utf-8"
+            ),
+            keepConnectionOpen: true
+        )
     }
 
     private func bonjourTXTRecord() -> Data {

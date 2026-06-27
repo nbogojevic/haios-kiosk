@@ -47,9 +47,9 @@ struct SettingsView: View {
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                 } header: {
-                    Text("Local HTTP Server")
+                    Text("Local Servers")
                 } footer: {
-                    Text("Clients must use HTTP Basic authentication. Clear both fields to disable authentication.")
+                    Text("Clients must use Basic authentication for the HTTP camera endpoints and RTSP stream. Clear both fields to disable authentication.")
                 }
 
                 Section {

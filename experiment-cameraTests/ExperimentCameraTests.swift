@@ -276,6 +276,30 @@ struct ExperimentCameraTests {
         #expect(request?.headers["user-agent"] == "VLC")
     }
 
+    @Test func rtspRequestParsesBasicAuthorizationHeader() {
+        let authorizationHeader = basicAuthorizationHeader(username: "kamera", password: "lozinka")
+        let payload = Data(
+            """
+            DESCRIBE rtsp://192.168.1.5:2113/stream RTSP/1.0\r
+            CSeq: 8\r
+            Authorization: \(authorizationHeader)\r
+            \r
+            """.utf8
+        )
+
+        let connection = NWConnection(
+            to: .hostPort(host: "127.0.0.1", port: 2113),
+            using: .tcp
+        )
+        let request = RTSPRequest.parse(from: payload, error: nil, connection: connection)
+        let credentials = HTTPServerAuthentication.currentCredentials(userDefaults: temporaryUserDefaults())
+
+        #expect(request?.method == "DESCRIBE")
+        #expect(request?.path == "/stream")
+        #expect(request?.headers["authorization"] == authorizationHeader)
+        #expect(credentials.authorizes(headerValue: request?.headers["authorization"]))
+    }
+
     @Test func rtspSdpDescriptionIncludesCurrentVideoLinesAndStreamURL() {
         let streamURL = "rtsp://192.168.1.5:2113/stream"
         let sdp = RTSPServer.sdpDescription(appName: "experiment-camera", streamURL: streamURL)
