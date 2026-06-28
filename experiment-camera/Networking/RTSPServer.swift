@@ -10,6 +10,64 @@ import Network
 import UIKit
 @preconcurrency import AVFoundation
 
+enum RTSPStreamResolutionScale: String, CaseIterable, Identifiable {
+    static let storageKey = "rtspStreamResolutionScale"
+    static let defaultScale: RTSPStreamResolutionScale = .full
+
+    case full
+    case half
+    case quarter
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .full:
+            return "Full"
+        case .half:
+            return "1/2"
+        case .quarter:
+            return "1/4"
+        }
+    }
+
+    var scaleFactor: CGFloat {
+        switch self {
+        case .full:
+            return 1
+        case .half:
+            return 0.5
+        case .quarter:
+            return 0.25
+        }
+    }
+
+    static func current(userDefaults: UserDefaults = .standard) -> RTSPStreamResolutionScale {
+        guard let rawValue = userDefaults.string(forKey: storageKey),
+              let configuredScale = RTSPStreamResolutionScale(rawValue: rawValue) else {
+            return defaultScale
+        }
+
+        return configuredScale
+    }
+
+    func scaledSize(width: Int, height: Int) -> (width: Int32, height: Int32) {
+        guard self != .full else {
+            return (Int32(width), Int32(height))
+        }
+
+        return (
+            Int32(Self.evenDimension(width, scaleFactor: scaleFactor)),
+            Int32(Self.evenDimension(height, scaleFactor: scaleFactor))
+        )
+    }
+
+    private static func evenDimension(_ dimension: Int, scaleFactor: CGFloat) -> Int {
+        let scaledDimension = max(Int((CGFloat(dimension) * scaleFactor).rounded()), 2)
+        return scaledDimension.isMultiple(of: 2) ? scaledDimension : max(scaledDimension - 1, 2)
+    }
+}
+
 final class RTSPServer {
     nonisolated static let serviceType = "_rtsp._tcp"
     nonisolated static let streamPath = "/stream"
@@ -25,17 +83,18 @@ final class RTSPServer {
     nonisolated(unsafe) private var activeSession: RTSPSessionState?
     nonisolated(unsafe) private var activeConnection: NWConnection?
     nonisolated(unsafe) private var latestParameterSets: H264ParameterSets?
-    private lazy var encoder = H264VideoEncoder { [weak self] accessUnit in
-        self?.streamQueue.async {
-            self?.sendEncodedAccessUnit(accessUnit)
-        }
-    }
+    nonisolated(unsafe) private var encoder: H264VideoEncoder!
     nonisolated(unsafe) var authenticationProvider: () -> HTTPServerAuthentication = {
         HTTPServerAuthentication.currentCredentials()
     }
 
     init(port: UInt16) {
         self.port = NWEndpoint.Port(rawValue: port) ?? .init(integerLiteral: 2113)
+        self.encoder = H264VideoEncoder { [weak self] accessUnit in
+            self?.streamQueue.async {
+                self?.sendEncodedAccessUnit(accessUnit)
+            }
+        }
     }
 
     func start() {
@@ -91,6 +150,10 @@ final class RTSPServer {
         stateLock.unlock()
 
         encoder.reset()
+    }
+
+    nonisolated func setStreamResolutionScale(_ scale: RTSPStreamResolutionScale) {
+        encoder.setResolutionScale(scale)
     }
 
     nonisolated func enqueueSampleBuffer(_ sampleBuffer: CMSampleBuffer) {

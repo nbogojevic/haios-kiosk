@@ -7,6 +7,7 @@
 
 import Foundation
 @preconcurrency import AVFoundation
+import CoreImage
 import VideoToolbox
 
 struct H264ParameterSets {
@@ -38,7 +39,12 @@ struct UnsafeSampleBuffer: @unchecked Sendable {
 
 final class H264VideoEncoder {
     private let encodingQueue = DispatchQueue(label: "CameraCaptureService.RTSPServer.H264Encoder")
+    private let ciContext = CIContext(options: [.cacheIntermediates: false])
     nonisolated(unsafe) private var compressionSession: VTCompressionSession?
+    nonisolated(unsafe) private var resolutionScale = RTSPStreamResolutionScale.current()
+    nonisolated(unsafe) private var encodedFrameSize: (width: Int32, height: Int32)?
+    nonisolated(unsafe) private var scaledPixelBufferPool: CVPixelBufferPool?
+    nonisolated(unsafe) private var scaledPixelBufferPoolSize: (width: Int32, height: Int32)?
     nonisolated(unsafe) private let onAccessUnit: (EncodedH264AccessUnit) -> Void
 
     init(onAccessUnit: @escaping (EncodedH264AccessUnit) -> Void) {
@@ -52,33 +58,46 @@ final class H264VideoEncoder {
         }
     }
 
+    nonisolated func setResolutionScale(_ scale: RTSPStreamResolutionScale) {
+        encodingQueue.async { [weak self] in
+            guard let self, self.resolutionScale != scale else {
+                return
+            }
+
+            self.resolutionScale = scale
+            self.invalidateCompressionSession()
+            self.scaledPixelBufferPool = nil
+            self.scaledPixelBufferPoolSize = nil
+        }
+    }
+
     nonisolated func reset() {
         encodingQueue.async { [weak self] in
             guard let self else {
                 return
             }
 
-            if let compressionSession = self.compressionSession {
-                VTCompressionSessionCompleteFrames(compressionSession, untilPresentationTimeStamp: .invalid)
-                VTCompressionSessionInvalidate(compressionSession)
-            }
-            self.compressionSession = nil
+            self.invalidateCompressionSession()
         }
     }
 
     private func encodeOnQueue(_ sampleBuffer: CMSampleBuffer) {
-        guard let imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
+        guard let sourceImageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer),
+              let imageBuffer = imageBufferForEncoding(sourceImageBuffer) else {
             return
         }
 
         let width = Int32(CVPixelBufferGetWidth(imageBuffer))
         let height = Int32(CVPixelBufferGetHeight(imageBuffer))
 
-        if compressionSession == nil {
+        if compressionSession == nil || encodedFrameSize?.width != width || encodedFrameSize?.height != height {
+            invalidateCompressionSession()
+
             guard let session = makeCompressionSession(width: width, height: height) else {
                 return
             }
             compressionSession = session
+            encodedFrameSize = (width, height)
         }
 
         guard let compressionSession else {
@@ -96,6 +115,86 @@ final class H264VideoEncoder {
             sourceFrameRefcon: nil,
             infoFlagsOut: nil
         )
+    }
+
+    private func invalidateCompressionSession() {
+        if let compressionSession {
+            VTCompressionSessionCompleteFrames(compressionSession, untilPresentationTimeStamp: .invalid)
+            VTCompressionSessionInvalidate(compressionSession)
+        }
+
+        compressionSession = nil
+        encodedFrameSize = nil
+    }
+
+    private func imageBufferForEncoding(_ sourceImageBuffer: CVImageBuffer) -> CVImageBuffer? {
+        guard resolutionScale != .full else {
+            return sourceImageBuffer
+        }
+
+        let sourceWidth = CVPixelBufferGetWidth(sourceImageBuffer)
+        let sourceHeight = CVPixelBufferGetHeight(sourceImageBuffer)
+        let targetSize = resolutionScale.scaledSize(width: sourceWidth, height: sourceHeight)
+
+        guard targetSize.width > 0, targetSize.height > 0 else {
+            return sourceImageBuffer
+        }
+
+        guard let destinationBuffer = scaledPixelBuffer(width: targetSize.width, height: targetSize.height) else {
+            return sourceImageBuffer
+        }
+
+        let sourceImage = CIImage(cvPixelBuffer: sourceImageBuffer)
+        let scaleTransform = CGAffineTransform(
+            scaleX: CGFloat(targetSize.width) / CGFloat(sourceWidth),
+            y: CGFloat(targetSize.height) / CGFloat(sourceHeight)
+        )
+        let scaledImage = sourceImage.transformed(by: scaleTransform)
+
+        ciContext.render(
+            scaledImage,
+            to: destinationBuffer,
+            bounds: CGRect(x: 0, y: 0, width: CGFloat(targetSize.width), height: CGFloat(targetSize.height)),
+            colorSpace: CGColorSpaceCreateDeviceRGB()
+        )
+
+        return destinationBuffer
+    }
+
+    private func scaledPixelBuffer(width: Int32, height: Int32) -> CVPixelBuffer? {
+        if scaledPixelBufferPool == nil || scaledPixelBufferPoolSize?.width != width || scaledPixelBufferPoolSize?.height != height {
+            scaledPixelBufferPool = makePixelBufferPool(width: width, height: height)
+            scaledPixelBufferPoolSize = (width, height)
+        }
+
+        guard let scaledPixelBufferPool else {
+            return nil
+        }
+
+        var pixelBuffer: CVPixelBuffer?
+        let status = CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault, scaledPixelBufferPool, &pixelBuffer)
+        guard status == kCVReturnSuccess else {
+            return nil
+        }
+
+        return pixelBuffer
+    }
+
+    private func makePixelBufferPool(width: Int32, height: Int32) -> CVPixelBufferPool? {
+        let attributes: [String: Any] = [
+            kCVPixelBufferPixelFormatTypeKey as String: Int(kCVPixelFormatType_32BGRA),
+            kCVPixelBufferWidthKey as String: Int(width),
+            kCVPixelBufferHeightKey as String: Int(height),
+            kCVPixelBufferIOSurfacePropertiesKey as String: [:]
+        ]
+
+        var pool: CVPixelBufferPool?
+        let status = CVPixelBufferPoolCreate(kCFAllocatorDefault, nil, attributes as CFDictionary, &pool)
+        guard status == kCVReturnSuccess else {
+            return nil
+        }
+
+        return pool
     }
 
     private func makeCompressionSession(width: Int32, height: Int32) -> VTCompressionSession? {

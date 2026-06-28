@@ -25,6 +25,7 @@ struct ContentView: View {
     @AppStorage(BrowserSession.startupURLStorageKey) private var startupURLString = BrowserSession.defaultStartupURLString
     @AppStorage(HTTPServerAuthentication.usernameStorageKey) private var httpServerUsername = HTTPServerAuthentication.defaultUsername
     @AppStorage(HTTPServerAuthentication.passwordStorageKey) private var httpServerPassword = HTTPServerAuthentication.defaultPassword
+    @AppStorage(RTSPStreamResolutionScale.storageKey) private var rtspStreamResolutionScaleRawValue = RTSPStreamResolutionScale.defaultScale.rawValue
 
     @Environment(\.modelContext) private var modelContext
     @Environment(\.scenePhase) private var scenePhase
@@ -135,6 +136,7 @@ struct ContentView: View {
 
                 browserSession.loadInitialPageIfNeeded()
                 cameraService.setCaptureInterval(seconds: captureIntervalSeconds)
+                cameraService.setRTSPStreamResolutionScale(rtspStreamResolutionScale)
                 pruneStoredCaptures()
 
                 if startCameraOnLaunch {
@@ -149,6 +151,9 @@ struct ContentView: View {
         }
         .onChange(of: captureIntervalSeconds) { _, newValue in
             cameraService.setCaptureInterval(seconds: newValue)
+        }
+        .onChange(of: rtspStreamResolutionScaleRawValue) { _, _ in
+            cameraService.setRTSPStreamResolutionScale(rtspStreamResolutionScale)
         }
         .onChange(of: startupURLString) { _, _ in
             browserSession.loadInitialPageIfNeeded()
@@ -198,6 +203,7 @@ struct ContentView: View {
                 startupURLString: $startupURLString,
                 httpServerUsername: $httpServerUsername,
                 httpServerPassword: $httpServerPassword,
+                rtspStreamResolutionScaleRawValue: $rtspStreamResolutionScaleRawValue,
                 screenSaverSeconds: $screenSaverSeconds,
                 screenDimDelaySeconds: $screenDimDelaySeconds,
                 screenDimBrightnessPercent: $screenDimBrightnessPercent,
@@ -255,6 +261,10 @@ struct ContentView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .trackUserActivity(registerUserActivity)
+    }
+
+    private var rtspStreamResolutionScale: RTSPStreamResolutionScale {
+        RTSPStreamResolutionScale(rawValue: rtspStreamResolutionScaleRawValue) ?? RTSPStreamResolutionScale.defaultScale
     }
 
     private func insertCapturedItem(timestamp: Date, imagePath: String) {

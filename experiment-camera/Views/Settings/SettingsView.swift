@@ -9,10 +9,12 @@ struct SettingsView: View {
     @Binding var startupURLString: String
     @Binding var httpServerUsername: String
     @Binding var httpServerPassword: String
+    @Binding var rtspStreamResolutionScaleRawValue: String
     @Binding var screenSaverSeconds: Int
     @Binding var screenDimDelaySeconds: Int
     @Binding var screenDimBrightnessPercent: Int
     @State private var totalStoredImageBytes: Int64 = 0
+    @State private var isHTTPServerPasswordVisible = false
     let onUserActivity: () -> Void
     @Environment(\.dismiss) private var dismiss
 
@@ -43,13 +45,28 @@ struct SettingsView: View {
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
 
-                    SecureField("Password", text: $httpServerPassword)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
+                    httpServerPasswordField
                 } header: {
-                    Text("Local Servers")
+                    Text("Local Server Credentials")
                 } footer: {
                     Text("Clients must use Basic authentication for the HTTP camera endpoints and RTSP stream. Clear both fields to disable authentication.")
+                }
+
+                Section {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Resolution")
+
+                        Picker("RTSP stream resolution", selection: rtspStreamResolutionScaleBinding) {
+                            ForEach(RTSPStreamResolutionScale.allCases) { scale in
+                                Text(scale.title).tag(scale)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                    }
+                } header: {
+                    Text("RTSP Streaming")
+                } footer: {
+                    Text("Choose the RTSP stream resolution. Saved captures and the camera preview remain full resolution.")
                 }
 
                 Section {
@@ -163,6 +180,30 @@ struct SettingsView: View {
         captureIntervalSeconds == 1 ? "1 second" : "\(captureIntervalSeconds) seconds"
     }
 
+    private var httpServerPasswordField: some View {
+        HStack {
+            Group {
+                if isHTTPServerPasswordVisible {
+                    TextField("Password", text: $httpServerPassword)
+                } else {
+                    SecureField("Password", text: $httpServerPassword)
+                }
+            }
+            .textInputAutocapitalization(.never)
+            .textContentType(.password)
+            .autocorrectionDisabled()
+
+            Button {
+                onUserActivity()
+                isHTTPServerPasswordVisible.toggle()
+            } label: {
+                Image(systemName: isHTTPServerPasswordVisible ? "eye.slash" : "eye")
+            }
+            .buttonStyle(.borderless)
+            .accessibilityLabel(isHTTPServerPasswordVisible ? "Hide password" : "Show password")
+        }
+    }
+
     private var retentionDescription: String {
         guard retentionModeBinding.wrappedValue == .count else {
             return "Used only when retention policy is Newest count"
@@ -198,6 +239,14 @@ struct SettingsView: View {
             CaptureRetentionPolicy.Mode(rawValue: captureRetentionModeRawValue) ?? CaptureRetentionPolicy.defaultMode
         } set: { newMode in
             captureRetentionModeRawValue = newMode.rawValue
+        }
+    }
+
+    private var rtspStreamResolutionScaleBinding: Binding<RTSPStreamResolutionScale> {
+        Binding {
+            RTSPStreamResolutionScale(rawValue: rtspStreamResolutionScaleRawValue) ?? RTSPStreamResolutionScale.defaultScale
+        } set: { newScale in
+            rtspStreamResolutionScaleRawValue = newScale.rawValue
         }
     }
 

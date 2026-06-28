@@ -311,6 +311,26 @@ struct ExperimentCameraTests {
         #expect(sdp.contains("a=x-stream-url:\(streamURL)"))
     }
 
+    @Test func rtspStreamResolutionScaleUsesFullByDefault() {
+        let defaults = temporaryUserDefaults()
+
+        #expect(RTSPStreamResolutionScale.current(userDefaults: defaults) == .full)
+
+        defaults.set("unknown", forKey: RTSPStreamResolutionScale.storageKey)
+        #expect(RTSPStreamResolutionScale.current(userDefaults: defaults) == .full)
+    }
+
+    @Test func rtspStreamResolutionScaleComputesScaledEvenDimensions() {
+        #expect(RTSPStreamResolutionScale.full.scaledSize(width: 1920, height: 1080).width == 1920)
+        #expect(RTSPStreamResolutionScale.full.scaledSize(width: 1920, height: 1080).height == 1080)
+        #expect(RTSPStreamResolutionScale.half.scaledSize(width: 1920, height: 1080).width == 960)
+        #expect(RTSPStreamResolutionScale.half.scaledSize(width: 1920, height: 1080).height == 540)
+        #expect(RTSPStreamResolutionScale.quarter.scaledSize(width: 1920, height: 1080).width == 480)
+        #expect(RTSPStreamResolutionScale.quarter.scaledSize(width: 1920, height: 1080).height == 270)
+        #expect(RTSPStreamResolutionScale.half.scaledSize(width: 5, height: 5).width == 2)
+        #expect(RTSPStreamResolutionScale.half.scaledSize(width: 5, height: 5).height == 2)
+    }
+
     @Test func deviceCameraOrientationMapsAllFourMainDeviceOrientations() {
         #expect(DeviceCameraOrientation(deviceOrientation: .portrait) == .portrait)
         #expect(DeviceCameraOrientation(deviceOrientation: .portraitUpsideDown) == .portraitUpsideDown)

@@ -338,6 +338,7 @@ final class CameraCaptureService: ObservableObject {
             await self?.setCameraRunning(shouldRun) ?? false
         }
         imageServer.start()
+        rtspServer.setStreamResolutionScale(RTSPStreamResolutionScale.current())
         rtspServer.start()
 
         sessionController.onCapture = { [weak self] result in
@@ -420,6 +421,10 @@ final class CameraCaptureService: ObservableObject {
         if isRunning {
             scheduleTimedCaptures()
         }
+    }
+
+    func setRTSPStreamResolutionScale(_ scale: RTSPStreamResolutionScale) {
+        rtspServer.setStreamResolutionScale(scale)
     }
 
     func start() async {
