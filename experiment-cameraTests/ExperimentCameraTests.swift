@@ -11,6 +11,7 @@ import UIKit
 import Network
 @testable import experiment_camera
 
+@Suite(.serialized)
 struct ExperimentCameraTests {
     @Test func httpServerAuthenticationUsesDefaultCredentials() {
         let credentials = HTTPServerAuthentication.currentCredentials(userDefaults: temporaryUserDefaults())
@@ -67,12 +68,20 @@ struct ExperimentCameraTests {
     @Test func pruneCapturedImagesKeepsNewestTenJPEGs() throws {
         let defaults = UserDefaults.standard
         let previousMode = defaults.string(forKey: CaptureRetentionPolicy.modeStorageKey)
+        let previousMaxRetainedImages = defaults.object(forKey: CaptureRetentionPolicy.storageKey) as? Int
         defaults.set(CaptureRetentionPolicy.Mode.count.rawValue, forKey: CaptureRetentionPolicy.modeStorageKey)
+        defaults.set(10, forKey: CaptureRetentionPolicy.storageKey)
         defer {
             if let previousMode {
                 defaults.set(previousMode, forKey: CaptureRetentionPolicy.modeStorageKey)
             } else {
                 defaults.removeObject(forKey: CaptureRetentionPolicy.modeStorageKey)
+            }
+
+            if let previousMaxRetainedImages {
+                defaults.set(previousMaxRetainedImages, forKey: CaptureRetentionPolicy.storageKey)
+            } else {
+                defaults.removeObject(forKey: CaptureRetentionPolicy.storageKey)
             }
         }
 
@@ -213,6 +222,7 @@ struct ExperimentCameraTests {
         #expect(remainingFileNames == ["frame-2.jpg"])
     }
 
+    @MainActor
     @Test func mjpegStreamStateWaitsForCurrentSessionFirstImage() {
         let waitingCameraInfo = DeviceInfoSnapshot.CameraInfo(
             isFilming: true,
@@ -255,12 +265,13 @@ struct ExperimentCameraTests {
 
     @Test func rtspRequestParsesAbsoluteStreamURLAndCSeq() {
         let payload = Data(
-            """
-            OPTIONS rtsp://192.168.1.5:2113/stream RTSP/1.0\r
-            CSeq: 7\r
-            User-Agent: VLC\r
-            \r
-            """.utf8
+            [
+                "OPTIONS rtsp://192.168.1.5:2113/stream RTSP/1.0",
+                "CSeq: 7",
+                "User-Agent: VLC",
+                "",
+                ""
+            ].joined(separator: "\r\n").utf8
         )
 
         let connection = NWConnection(
@@ -279,12 +290,13 @@ struct ExperimentCameraTests {
     @Test func rtspRequestParsesBasicAuthorizationHeader() {
         let authorizationHeader = basicAuthorizationHeader(username: "kamera", password: "lozinka")
         let payload = Data(
-            """
-            DESCRIBE rtsp://192.168.1.5:2113/stream RTSP/1.0\r
-            CSeq: 8\r
-            Authorization: \(authorizationHeader)\r
-            \r
-            """.utf8
+            [
+                "DESCRIBE rtsp://192.168.1.5:2113/stream RTSP/1.0",
+                "CSeq: 8",
+                "Authorization: \(authorizationHeader)",
+                "",
+                ""
+            ].joined(separator: "\r\n").utf8
         )
 
         let connection = NWConnection(
@@ -331,6 +343,7 @@ struct ExperimentCameraTests {
         #expect(RTSPStreamResolutionScale.half.scaledSize(width: 5, height: 5).height == 2)
     }
 
+    @MainActor
     @Test func deviceCameraOrientationMapsAllFourMainDeviceOrientations() {
         #expect(DeviceCameraOrientation(deviceOrientation: .portrait) == .portrait)
         #expect(DeviceCameraOrientation(deviceOrientation: .portraitUpsideDown) == .portraitUpsideDown)
@@ -340,6 +353,7 @@ struct ExperimentCameraTests {
         #expect(DeviceCameraOrientation(deviceOrientation: .faceDown) == nil)
     }
 
+    @MainActor
     @Test func deviceCameraOrientationProvidesExpectedRotationAngles() {
         #expect(DeviceCameraOrientation.portrait.videoRotationAngle == 90)
         #expect(DeviceCameraOrientation.landscapeLeft.videoRotationAngle == 180)

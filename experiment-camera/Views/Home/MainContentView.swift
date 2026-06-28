@@ -35,6 +35,11 @@ struct ContentView: View {
     @State private var didConfigureInitialState = false
     @State private var navigationPath: [AppDestination] = []
     @State private var pruneTask: Task<Void, Never>?
+    @State private var pendingCapturePruneCount = 0
+    @State private var lastCapturePruneDate = Date.distantPast
+    private let capturePruneDebounceDelay: Duration = .seconds(5)
+    private let capturePruneMaximumDelay: TimeInterval = 60
+    private let capturePruneCountThreshold = 10
 
     @AppStorage("screenSaverSeconds") private var screenSaverSeconds = 45
     @AppStorage("screenDimDelaySeconds") private var screenDimDelaySeconds = 30
@@ -45,6 +50,8 @@ struct ContentView: View {
     @State private var screenSaverActivatedAt: Date?
     @State private var currentTime = Date()
     private let inactivityTimer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
+    private let screenSaverDriftAmplitude: CGFloat = 18
+    private let screenSaverDriftCycleDuration: TimeInterval = 4 * 60 * 60
 
     var body: some View {
         ZStack {
@@ -270,10 +277,21 @@ struct ContentView: View {
     private func insertCapturedItem(timestamp: Date, imagePath: String) {
         modelContext.insert(Item(timestamp: timestamp, imagePath: imagePath))
         try? modelContext.save()
-        pruneStoredCaptures()
+        pruneStoredCapturesAfterCapture()
     }
 
-    private func pruneStoredCaptures() {
+    private func pruneStoredCapturesAfterCapture() {
+        pendingCapturePruneCount += 1
+
+        let elapsedSinceLastPrune = Date().timeIntervalSince(lastCapturePruneDate)
+        if pendingCapturePruneCount >= capturePruneCountThreshold || elapsedSinceLastPrune >= capturePruneMaximumDelay {
+            pruneStoredCaptures()
+        } else {
+            pruneStoredCaptures(after: capturePruneDebounceDelay)
+        }
+    }
+
+    private func pruneStoredCaptures(after delay: Duration = .zero) {
         pruneTask?.cancel()
 
         let capturesDirectory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
@@ -281,6 +299,12 @@ struct ContentView: View {
         let retainedImageCount = maxRetainedImages
 
         pruneTask = Task(priority: .utility) {
+            try? await Task.sleep(for: delay)
+
+            guard !Task.isCancelled else {
+                return
+            }
+
             _ = try? CaptureRetentionPolicy.pruneCapturedImages(in: capturesDirectory, keepingNewest: retainedImageCount)
             let existingImageTimestamps = Self.capturedImageTimestamps(in: capturesDirectory)
 
@@ -294,6 +318,8 @@ struct ContentView: View {
                 }
 
                 applyStoredCapturePruning(existingImageTimestamps: existingImageTimestamps, capturesDirectory: capturesDirectory)
+                pendingCapturePruneCount = 0
+                lastCapturePruneDate = Date()
             }
         }
     }
@@ -384,12 +410,8 @@ struct ContentView: View {
                 return fileURL.path
             }
 
-            if FileManager.default.fileExists(atPath: fileURL.path) {
-                return fileURL.path
-            }
-
             let fallbackPath = capturesDirectory.appendingPathComponent(fileURL.lastPathComponent).path
-            if existingImagePaths.contains(fallbackPath) || FileManager.default.fileExists(atPath: fallbackPath) {
+            if existingImagePaths.contains(fallbackPath) {
                 return fallbackPath
             }
 
@@ -401,12 +423,8 @@ struct ContentView: View {
             return pathURL.path
         }
 
-        if FileManager.default.fileExists(atPath: pathURL.path) {
-            return pathURL.path
-        }
-
         let fallbackPath = capturesDirectory.appendingPathComponent(pathURL.lastPathComponent).path
-        if existingImagePaths.contains(fallbackPath) || FileManager.default.fileExists(atPath: fallbackPath) {
+        if existingImagePaths.contains(fallbackPath) {
             return fallbackPath
         }
 
@@ -445,6 +463,7 @@ struct ContentView: View {
                     .multilineTextAlignment(.center)
             }
             .padding(.horizontal)
+            .offset(y: screenSaverClockVerticalOffset)
 
             if isScreenDimmed {
                 Color.black
@@ -477,6 +496,18 @@ struct ContentView: View {
 
     private var formattedCurrentDate: String {
         currentTime.formatted(date: .complete, time: .omitted)
+    }
+
+    private var screenSaverClockVerticalOffset: CGFloat {
+        guard isScreenSaverActive,
+              let activatedAt = screenSaverActivatedAt,
+              screenSaverDriftCycleDuration > 0 else {
+            return 0
+        }
+
+        let elapsed = currentTime.timeIntervalSince(activatedAt)
+        let phase = (2 * Double.pi * elapsed) / screenSaverDriftCycleDuration
+        return -screenSaverDriftAmplitude * CGFloat(sin(phase))
     }
 
     private func registerUserActivity() {

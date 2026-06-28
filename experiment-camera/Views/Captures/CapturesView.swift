@@ -15,31 +15,36 @@ struct CapturesView: View {
     @State private var shareSheetPayload: ShareSheetPayload?
 
     var body: some View {
+        let resolvedItems = resolvedCaptureItems
+
         List {
-            ForEach(items) { item in
+            ForEach(resolvedItems) { resolvedItem in
                 if isSelectingItems {
                     Button {
-                        toggleSelection(for: item)
+                        toggleSelection(for: resolvedItem.item)
                     } label: {
                         CaptureRowContentView(
-                            item: item,
+                            item: resolvedItem.item,
+                            imageURL: resolvedItem.imageURL,
                             isSelecting: true,
-                            isSelected: selectedItemIDs.contains(item.persistentModelID)
+                            isSelected: selectedItemIDs.contains(resolvedItem.item.persistentModelID)
                         )
                     }
                     .buttonStyle(.plain)
                 } else {
                     Button {
                         onUserActivity()
-                        selectedItem = item
+                        selectedItem = resolvedItem.item
                     } label: {
-                        CaptureRowContentView(item: item)
+                        CaptureRowContentView(item: resolvedItem.item, imageURL: resolvedItem.imageURL)
                     }
                     .buttonStyle(.plain)
                     .accessibilityIdentifier("CaptureRow")
                 }
             }
-            .onDelete(perform: deleteItems)
+            .onDelete { offsets in
+                deleteItems(offsets: offsets, resolvedItems: resolvedItems)
+            }
         }
         .simultaneousGesture(DragGesture(minimumDistance: 10).onChanged { _ in
             onUserActivity()
@@ -74,12 +79,12 @@ struct CapturesView: View {
                 HStack {
                     Button {
                         onUserActivity()
-                        shareSelectedOrLatestImage()
+                        shareSelectedOrLatestImage(resolvedItems: resolvedItems)
                     } label: {
                         Image(systemName: "square.and.arrow.up")
                     }
-                    .accessibilityLabel(shareButtonAccessibilityLabel)
-                    .disabled(shareableImageURLs.isEmpty)
+                    .accessibilityLabel(shareButtonAccessibilityLabel(resolvedItems: resolvedItems))
+                    .disabled(shareableImageURLs(in: resolvedItems).isEmpty)
 
                     Button(role: .destructive) {
                         onUserActivity()
@@ -138,30 +143,36 @@ struct CapturesView: View {
         selectedItemIDs.count == items.count ? "Clear" : "Select All"
     }
 
-    private var latestAvailableImageURL: URL? {
-        items.compactMap(\.resolvedImageURL).first
+    private var resolvedCaptureItems: [ResolvedCaptureItem] {
+        items.map { item in
+            ResolvedCaptureItem(item: item, imageURL: item.resolvedImageURL)
+        }
     }
 
-    private var selectedShareableImageURLs: [URL] {
-        items
-            .filter { selectedItemIDs.contains($0.persistentModelID) }
-            .compactMap(\.resolvedImageURL)
+    private func latestAvailableImageURL(in resolvedItems: [ResolvedCaptureItem]) -> URL? {
+        resolvedItems.compactMap(\.imageURL).first
     }
 
-    private var shareableImageURLs: [URL] {
+    private func selectedShareableImageURLs(in resolvedItems: [ResolvedCaptureItem]) -> [URL] {
+        resolvedItems
+            .filter { selectedItemIDs.contains($0.item.persistentModelID) }
+            .compactMap(\.imageURL)
+    }
+
+    private func shareableImageURLs(in resolvedItems: [ResolvedCaptureItem]) -> [URL] {
         if selectedItemIDs.isEmpty {
-            return latestAvailableImageURL.map { [$0] } ?? []
+            return latestAvailableImageURL(in: resolvedItems).map { [$0] } ?? []
         }
 
-        return selectedShareableImageURLs
+        return selectedShareableImageURLs(in: resolvedItems)
     }
 
-    private var shareButtonAccessibilityLabel: String {
+    private func shareButtonAccessibilityLabel(resolvedItems: [ResolvedCaptureItem]) -> String {
         if selectedItemIDs.isEmpty {
             return "Share latest captured image"
         }
 
-        let count = selectedShareableImageURLs.count
+        let count = selectedShareableImageURLs(in: resolvedItems).count
         return count == 1 ? "Share selected image" : "Share \(count) selected images"
     }
 
@@ -194,8 +205,8 @@ struct CapturesView: View {
         }
     }
 
-    private func shareSelectedOrLatestImage() {
-        let imageURLs = shareableImageURLs
+    private func shareSelectedOrLatestImage(resolvedItems: [ResolvedCaptureItem]) {
+        let imageURLs = shareableImageURLs(in: resolvedItems)
         guard !imageURLs.isEmpty else {
             return
         }
@@ -210,10 +221,11 @@ struct CapturesView: View {
         shareSheetPayload = ShareSheetPayload(imageURLs: [imageURL]) { @MainActor @Sendable in }
     }
 
-    private func deleteItems(offsets: IndexSet) {
+    private func deleteItems(offsets: IndexSet, resolvedItems: [ResolvedCaptureItem]) {
         withAnimation {
             for index in offsets {
-                let item = items[index]
+                let resolvedItem = resolvedItems[index]
+                let item = resolvedItem.item
 
                 selectedItemIDs.remove(item.persistentModelID)
 
@@ -221,7 +233,7 @@ struct CapturesView: View {
                     selectedItem = nil
                 }
 
-                if let imageURL = item.resolvedImageURL {
+                if let imageURL = resolvedItem.imageURL {
                     try? FileManager.default.removeItem(at: imageURL)
                 }
 
@@ -256,8 +268,18 @@ struct CapturesView: View {
     }
 }
 
+private struct ResolvedCaptureItem: Identifiable {
+    let item: Item
+    let imageURL: URL?
+
+    var id: PersistentIdentifier {
+        item.persistentModelID
+    }
+}
+
 private struct CaptureRowContentView: View {
     let item: Item
+    let imageURL: URL?
     var isSelecting = false
     var isSelected = false
 
@@ -269,12 +291,12 @@ private struct CaptureRowContentView: View {
                     .foregroundStyle(isSelected ? AnyShapeStyle(.tint) : AnyShapeStyle(.tertiary))
             }
 
-            CaptureThumbnailView(imagePath: item.resolvedImageURL?.path)
+            CaptureThumbnailView(imagePath: imageURL?.path)
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(item.timestamp, format: Date.FormatStyle(date: .numeric, time: .standard))
 
-                if item.resolvedImageURL != nil {
+                if imageURL != nil {
                     Label("Captured image", systemImage: "photo")
                         .font(.caption)
                         .foregroundStyle(.secondary)

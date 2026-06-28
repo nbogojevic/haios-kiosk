@@ -12,6 +12,9 @@ xcuserdata/
 *.dSYM.zip
 *.dSYM
 
+# Profiler
+ProfileTraces/
+
 # Swift Package Manager
 .build/
 Package.resolved
