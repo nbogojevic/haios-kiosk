@@ -50,8 +50,8 @@ struct ContentView: View {
     @State private var screenSaverActivatedAt: Date?
     @State private var currentTime = Date()
     private let inactivityTimer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
-    private let screenSaverDriftAmplitude: CGFloat = 18
-    private let screenSaverDriftCycleDuration: TimeInterval = 4 * 60 * 60
+    private let screenSaverDriftAmplitude: CGFloat = 40
+    private let screenSaverDriftCycleDuration: TimeInterval = 60 * 60
 
     var body: some View {
         ZStack {
@@ -505,9 +505,25 @@ struct ContentView: View {
             return 0
         }
 
-        let elapsed = currentTime.timeIntervalSince(activatedAt)
-        let phase = (2 * Double.pi * elapsed) / screenSaverDriftCycleDuration
-        return -screenSaverDriftAmplitude * CGFloat(sin(phase))
+        let elapsed = max(0, currentTime.timeIntervalSince(activatedAt))
+        let cyclePosition = elapsed.truncatingRemainder(dividingBy: screenSaverDriftCycleDuration)
+        let quarterCycle = screenSaverDriftCycleDuration / 4
+        let amplitude = screenSaverDriftAmplitude
+
+        // Linear path over one cycle: center -> top -> center -> bottom -> center.
+        switch cyclePosition {
+        case ..<quarterCycle:
+            return -amplitude * CGFloat(cyclePosition / quarterCycle)
+        case ..<(2 * quarterCycle):
+            let progress = (cyclePosition - quarterCycle) / quarterCycle
+            return -amplitude + (amplitude * CGFloat(progress))
+        case ..<(3 * quarterCycle):
+            let progress = (cyclePosition - (2 * quarterCycle)) / quarterCycle
+            return amplitude * CGFloat(progress)
+        default:
+            let progress = (cyclePosition - (3 * quarterCycle)) / quarterCycle
+            return amplitude - (amplitude * CGFloat(progress))
+        }
     }
 
     private func registerUserActivity() {
